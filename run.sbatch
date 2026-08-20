@@ -19,7 +19,7 @@ module load lang/Python/3.12.3-GCCcore-13.3.0
 VENV_DIR="$HOME/bachelorarbeit/.venv"
 
 source "$VENV_DIR/bin/activate"
-pip install --upgrade -r requirements.txt
+#pip install --upgrade -r requirements.txt
 
 # --- Open project & script folder  ---
 PROJECT_DIR="$HOME/bachelorarbeit"
