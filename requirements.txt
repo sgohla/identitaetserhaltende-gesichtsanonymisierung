@@ -6,3 +6,4 @@ torchvision
 transformers
 accelerate
 qwen-vl-utils
+opencv-python
