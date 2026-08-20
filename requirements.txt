@@ -1,5 +1,4 @@
 scikit-build
-opencv-python-headless
 ultralytics
 numpy
 torch
