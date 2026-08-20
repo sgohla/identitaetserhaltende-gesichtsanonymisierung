@@ -1,0 +1,8 @@
+opencv-python-headless
+ultralytics
+numpy
+torch
+torchvision
+transformers
+accelerate
+qwen-vl-utils
