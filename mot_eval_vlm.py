@@ -395,7 +395,7 @@ MAX_LOST_FRAMES_FOR_RELINKING = 200  # Maximale Anzahl an Frames, die ein Track 
 person_histogram_models = {}  #geglättetes Histogramm
 HISTOGRAM_ALPHA = 0.15
 
-MIN_HISTOGRAM_SIMILARITY= 0.70
+MIN_HISTOGRAM_SIMILARITY= 0.65
 MIN_SCORE_MARGIN = 0.10
 MIN_SIMILARITY_MARGIN = 0.08
 MAX_POSITION_DISTANCE_FACTOR = 1.5 
@@ -405,7 +405,7 @@ relinked_track_ids = set()
 
 
 pending_track_frames ={}                 # paar frames abwarten bis zum Relinking, damit Histogramm aussagekräftig ist
-MIN_FRAMES_BEFORE_RELINKING = 15
+MIN_FRAMES_BEFORE_RELINKING = 10
 PENDING_HISTOGRAM_ALPHA = 0.30
 
 
