@@ -540,7 +540,7 @@ def position_is_plausible (old_person_box, new_person_box):
     
     return distance <= max_distance
 
-def find_matching_target(track_id, current_histogramm, current_person_box, frame_idx, active_target_ids_current_frame):
+def find_matching_target(track_id, current_histogramm, current_person_box, frame_idx, active_target_ids_current_frame, active_existing_target_ids):
     candidates = get_relinking_candidates(frame_idx)
     candidates_scores = []
     
@@ -553,10 +553,12 @@ def find_matching_target(track_id, current_histogramm, current_person_box, frame
         
         candidate_target_id = lost_data["target_id"]
         
-        # Target-ID wurde im aktuellen Frame bereits
-        # einer anderen Person zugeordnet.
+        if candidate_target_id in active_existing_target_ids:
+            continue
+        
         if candidate_target_id in active_target_ids_current_frame:
             continue
+        
 
         # Eine Target-ID darf nicht bereits von einem aktuell
         # sichtbaren anderen ByteTrack verwendet werden.
@@ -642,7 +644,7 @@ def find_matching_target(track_id, current_histogramm, current_person_box, frame
 
 
 
-def assign_target_id(track_id, person_box, current_histogram, frame_idx, active_target_ids_current_frame):
+def assign_target_id(track_id, person_box, current_histogram, frame_idx, active_target_ids_current_frame, active_existing_target_ids):
     """
     Gibt die Target-ID einer ByteTrack-ID zurück.
 
@@ -669,7 +671,7 @@ def assign_target_id(track_id, person_box, current_histogram, frame_idx, active_
 
     # Im dritten Frame wurde außerhalb dieser Funktion
     # erstmals ein Histogramm berechnet.
-    match = find_matching_target(track_id, current_histogram, person_box, frame_idx, active_target_ids_current_frame)
+    match = find_matching_target(track_id, current_histogram, person_box, frame_idx,active_target_ids_current_frame, active_existing_target_ids)
 
     if match is not None:
 
@@ -783,6 +785,23 @@ def process_frame(frame, model, frame_idx):
     
     boxes = results[0].boxes
     
+    active_existing_target_ids = set()
+
+    for box in boxes:
+        if box.id is None:
+            continue
+
+        cls = int(box.cls[0])
+
+        if cls != 0:
+            continue
+
+        current_track_id = int(box.id[0])
+
+        if current_track_id in track_to_target:
+            active_existing_target_ids.add(
+                track_to_target[current_track_id]
+        )
     
     for box in boxes:
         x1, y1, x2, y2 = box.xyxy[0].cpu().numpy().astype(int) # Koordinaten der Box
@@ -845,7 +864,7 @@ def process_frame(frame, model, frame_idx):
             if next_pending_frame >= MIN_FRAMES_BEFORE_RELINKING:
                 current_histogram = calculate_histogram(original_frame, person_box)
         
-        target_id = assign_target_id(track_id, person_box, current_histogram, frame_idx, active_target_ids_current_frame)
+        target_id = assign_target_id(track_id, person_box, current_histogram, frame_idx, active_target_ids_current_frame, active_existing_target_ids)
         
         if track_id in track_to_target:
             active_target_ids_current_frame.add(target_id)
