@@ -12,17 +12,14 @@ from transformers import (Qwen2_5_VLForConditionalGeneration, AutoProcessor)
 from qwen_vl_utils import process_vision_info
 
 
-sequence_path = Path("MOT17/val/MOT17-02-FRCNN")
-image_dir = sequence_path / "img1"
-
-image_paths = sorted(image_dir.glob("*.jpg"))
-
-video_name = "MOT17-02"
-
-print(f"Anzahl Frames: {len(image_paths)}")
+SEQUENCES = [
+    "MOT17-02-FRCNN",
+    "MOT17-04-FRCNN",
+    "MOT17-09-FRCNN",
+]
 
 # YOLO-Modell laden
-model = YOLO("yolov8m.pt")
+model = None
 
 
 QWEN_MODEL_NAME = "/fshpc/sgohla/bachelorarbeit/models/Qwen2.5-VL-7B-Instruct"
@@ -878,84 +875,146 @@ def process_frame(frame, model, frame_idx):
         pending_track_frames.pop(track_id, None)
 
     return frame
+
+def run_sequence(sequence_name):
+    global track_to_target
+    global active_track_ids_last_frame
+    global lost_tracks
+    global last_person_boxes
+    global person_histogram_models
+    global matched_lost_tracks
+    global relinked_track_ids
+    global pending_track_frames
+    global track_first_seen
+    global reference_frames
+    global track_last_seen
+    global mot_results_bytetrack
+    global mot_results_target
+    global pending_mot_results
+    global model
+    
+    track_to_target = {}
+    active_track_ids_last_frame = set()
+    lost_tracks = {}
+    last_person_boxes = {}
+
+    person_histogram_models = {}
+    matched_lost_tracks = set()
+    relinked_track_ids = set()
+
+    pending_track_frames = {}
+    track_first_seen = {}
+
+    reference_frames = {}
+    track_last_seen = {}
+
+    mot_results_bytetrack = []
+    mot_results_target = []
+    pending_mot_results = {}
+
+    # ByteTrack-Zustand ebenfalls neu starten
+    model = YOLO("yolov8m.pt")
+    
+    sequence_path = Path("MOT17/val") / sequence_name
+    image_dir = sequence_path / "img1"
+
+    image_paths = sorted(image_dir.glob("*.jpg"))
+
+    video_name = sequence_name.replace("-FRCNN", "")
+
+    print("\n" + "=" * 60)
+    print(f"Starte Sequenz: {sequence_name}")
+    print(f"Anzahl Frames: {len(image_paths)}")
+    print("=" * 60)
     
 
 
-processed_frames = 0
-total_processing_time = 0.0
+    processed_frames = 0
+    total_processing_time = 0.0
 
-frame_idx = 0
+    frame_idx = 0
 
 
-for image_path in image_paths:
+    for image_path in image_paths:
 
-    frame = cv2.imread(str(image_path))
+        frame = cv2.imread(str(image_path))
 
-    if frame is None:
-        print(f"Frame konnte nicht gelesen werden: {image_path}")
-        continue
+        if frame is None:
+            print(f"Frame konnte nicht gelesen werden: {image_path}")
+            continue
 
-    frame_idx += 1
+        frame_idx += 1
 
-    # Zeitmessung für die Verarbeitung eines Frames starten
-    start_time = time.perf_counter()
+        # Zeitmessung für die Verarbeitung eines Frames starten
+        start_time = time.perf_counter()
 
-    process_frame(frame, model, frame_idx)    
+        process_frame(frame, model, frame_idx)    
 
-    # Verarbeitungszeit dieses Frames berechnen
-    processing_time = time.perf_counter() - start_time
+        # Verarbeitungszeit dieses Frames berechnen
+        processing_time = time.perf_counter() - start_time
 
-    total_processing_time += processing_time
-    processed_frames += 1
-  
+        total_processing_time += processing_time
+        processed_frames += 1
+    
+            
+
+    # -------------------------------------------------
+    # Noch offene Pending-Tracks für die MOT-Evaluation
+    # abschließen
+    # -------------------------------------------------
+
+    for track_id in list(pending_mot_results.keys()):
+        finalize_pending_mot_results(track_id, track_id)
+
+
         
+    if processed_frames > 0:
 
-# -------------------------------------------------
-# Noch offene Pending-Tracks für die MOT-Evaluation
-# abschließen
-# -------------------------------------------------
+        average_processing_time = (total_processing_time / processed_frames)
 
-for track_id in list(pending_mot_results.keys()):
-    finalize_pending_mot_results(track_id, track_id)
+        processing_fps = (1.0 / average_processing_time)
 
+        print(f"\nVerarbeitete Frames: {processed_frames}")
 
+        print("Durchschnittliche Zeit pro Frame: "f"{average_processing_time:.4f} s")
+
+        print("Verarbeitungsgeschwindigkeit: "f"{processing_fps:.2f} FPS")
+        
+    os.makedirs(
+        "mot_results",
+        exist_ok=True
+    )
+
+    hist_tag = f"{int(MIN_HISTOGRAM_SIMILARITY * 100):03d}"
+    pending_tag = MIN_FRAMES_BEFORE_RELINKING
+
+    config_tag = f"h{hist_tag}_p{pending_tag}"
+
+    save_mot_results(
+        mot_results_bytetrack,
+        f"mot_results/{video_name}_bytetrack_{config_tag}.txt"
+    )
+
+    save_mot_results(
+        mot_results_target,
+        f"mot_results/{video_name}_qwen_{config_tag}.txt"
+    )
     
-if processed_frames > 0:
 
-    average_processing_time = (total_processing_time / processed_frames)
+    print("\nMOT-Evaluationsergebnisse gespeichert:")
+    print(
+        f"  ByteTrack: mot_results/{video_name}_bytetrack_{config_tag}.txt"
+    )
+    print(
+        f"  Re-Linking: mot_results/{video_name}_qwen_{config_tag}.txt"
+    )
 
-    processing_fps = (1.0 / average_processing_time)
 
-    print(f"\nVerarbeitete Frames: {processed_frames}")
-
-    print("Durchschnittliche Zeit pro Frame: "f"{average_processing_time:.4f} s")
-
-    print("Verarbeitungsgeschwindigkeit: "f"{processing_fps:.2f} FPS")
+    print(f"Erfolgreiche Re-Linkings: {len(relinked_track_ids)}")
+    print(f"ByteTrack-Einträge: {len(mot_results_bytetrack)}")
+    print(f"Target-Einträge: {len(mot_results_target)}")
     
-os.makedirs(
-    "mot_results",
-    exist_ok=True
-)
-
-save_mot_results(
-    mot_results_bytetrack,
-    f"mot_results/{video_name}_bytetrack.txt"
-)
-
-save_mot_results(
-    mot_results_target,
-    f"mot_results/{video_name}_qwen_070_f15.txt"
-)
-
-print("\nMOT-Evaluationsergebnisse gespeichert:")
-print(
-    f"  ByteTrack: mot_results/{video_name}_bytetrack.txt"
-)
-print(
-    f"  Re-Linking: mot_results/{video_name}_qwen_070_f15.txt"
-)
-
-
-print(f"Erfolgreiche Re-Linkings: {len(relinked_track_ids)}")
-print(f"ByteTrack-Einträge: {len(mot_results_bytetrack)}")
-print(f"Target-Einträge: {len(mot_results_target)}")
+    
+    
+for sequence_name in SEQUENCES:
+    run_sequence(sequence_name)
