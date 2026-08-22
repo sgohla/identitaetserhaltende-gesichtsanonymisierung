@@ -25,20 +25,21 @@ print(f"Anzahl Frames: {len(image_paths)}")
 model = YOLO("yolov8m.pt")
 
 
-QWEN_MODEL_NAME = "Qwen/Qwen2.5-VL-7B-Instruct"
+QWEN_MODEL_NAME = "/fshpc/sgohla/bachelorarbeit/models/Qwen2.5-VL-7B-Instruct"
 
 qwen_model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
     QWEN_MODEL_NAME,
     torch_dtype=torch.bfloat16,
-    device_map="auto"
+    device_map="auto",
+    local_files_only=True
 )
 
 qwen_processor = AutoProcessor.from_pretrained(
-    QWEN_MODEL_NAME
+    QWEN_MODEL_NAME,
+    local_files_only=True
 )
 
 qwen_model.eval()
-
 
 
 

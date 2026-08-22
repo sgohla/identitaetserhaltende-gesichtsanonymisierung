@@ -25,6 +25,8 @@ source "$VENV_DIR/bin/activate"
 PROJECT_DIR="$HOME/bachelorarbeit"
 cd "$PROJECT_DIR"
 
+export HF_HUB_OFFLINE=1
+
 # ---Start Python Script  ---
 python mot_eval_vlm.py
 # --- Deactivate venv ---
