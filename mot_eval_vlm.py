@@ -411,6 +411,9 @@ FINAL: DIFFERENT
 
 #Variablen
 track_to_target = {}  # Mapping von Track-ID zu Target-ID, z.B. {1: 2} bedeutet, dass Track 1 zu Target 2 gehört
+
+used_target_ids = set()
+
 active_track_ids_last_frame = set()  # Menge der Track-IDs, die im letzten Frame aktiv waren
 lost_tracks = {}  # Mapping von verlorenen Track-IDs zu den Frames, in denen sie zuletzt gesehen wurden. Speichert zu Track ID: Target-ID, zuletzt gesehenes Frame, zuletzt bekannte Personenbox (x1, y1, x2, y2)
 last_person_boxes = {}  # Mapping von Track-ID zu zuletzt bekannter Personenbox (x1, y1, x2, y2)
@@ -435,6 +438,24 @@ PENDING_HISTOGRAM_ALPHA = 0.30
 
 
 track_first_seen= {}
+
+def get_new_target_id(track_id):
+    """
+    Vergibt für eine tatsächlich neue Identität eine Target-ID.
+    Die ByteTrack-ID wird verwendet, solange diese Target-ID noch nie
+    einer Identität zugeordnet war. Andernfalls wird eine neue freie
+    Target-ID erzeugt.
+    """
+
+    if track_id not in used_target_ids:
+        return track_id
+
+    new_target_id = max(used_target_ids, default=0) + 1
+
+    while new_target_id in used_target_ids:
+        new_target_id += 1
+
+    return new_target_id
 
 
 # Funktion, um Kandidaten für Relinking zu erhalten
@@ -707,15 +728,23 @@ def assign_target_id(track_id, person_box, current_histogram, frame_idx, active_
                 track_id,
                 target_id
             ):
-                track_to_target[track_id] = track_id
+                new_target_id = get_new_target_id(track_id)
+
+                track_to_target[track_id] = new_target_id
+                used_target_ids.add(new_target_id)
 
                 print(
                     f"Re-Linking verworfen: Target {target_id} "
-                    f"war während der Pending-Frames bereits aktiv."
-                )
+                    f"war während der Pending-Frames bereits aktiv. "
+                    f"BT {track_id} -> Target {new_target_id}"
+    )
 
             else:
+                
                 track_to_target[track_id] = target_id
+                used_target_ids.add(target_id)
+
+                track_to_target.pop(lost_track_id, None)
 
                 lost_tracks.pop(
                     lost_track_id,
@@ -740,23 +769,31 @@ def assign_target_id(track_id, person_box, current_histogram, frame_idx, active_
         # Qwen lehnt Kandidaten ab
         else:
 
-            track_to_target[track_id] = track_id
+            new_target_id = get_new_target_id(track_id)
+
+            track_to_target[track_id] = new_target_id
+            used_target_ids.add(new_target_id)
 
             print(
                 f"Re-Linking durch Qwen abgelehnt: "
-                f"BT {track_id} -> Target {track_id} "
+                f"BT {track_id} -> Target {new_target_id} "
                 f"(Kandidat BT {lost_track_id}, "
                 f"Histogramm {match['similarity']:.3f}, "
                 f"Qwen {vision_result})"
             )
     else:
         # Kein geeigneter Histogramm-Kandidat vorhanden
-        track_to_target[track_id] = track_id
+    
+        new_target_id = get_new_target_id(track_id)
+
+        track_to_target[track_id] = new_target_id
+        used_target_ids.add(new_target_id)
 
         print(
             f"Neue Person bestätigt: "
-            f"BT {track_id} -> Target {track_id}"
+            f"BT {track_id} -> Target {new_target_id}"
         )
+
 
 
     # Die Wartephase ist abgeschlossen
@@ -970,7 +1007,9 @@ def run_sequence(sequence_name):
     global mot_results_target
     global pending_mot_results
     global model
+    global used_target_ids
     
+    used_target_ids = set()
     track_to_target = {}
     active_track_ids_last_frame = set()
     lost_tracks = {}
@@ -1042,7 +1081,13 @@ def run_sequence(sequence_name):
     # -------------------------------------------------
 
     for track_id in list(pending_mot_results.keys()):
-        finalize_pending_mot_results(track_id, track_id)
+        new_target_id = get_new_target_id(track_id)
+        used_target_ids.add(new_target_id)
+
+        finalize_pending_mot_results(
+            track_id,
+            new_target_id
+        )
 
 
         
