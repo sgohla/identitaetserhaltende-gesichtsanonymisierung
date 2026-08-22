@@ -515,7 +515,7 @@ def position_is_plausible (old_person_box, new_person_box):
     
     return distance <= max_distance
 
-def find_matching_target(track_id, current_histogramm, current_person_box, frame_idx):
+def find_matching_target(track_id, current_histogramm, current_person_box, frame_idx, active_target_ids_current_frame):
     candidates = get_relinking_candidates(frame_idx)
     candidates_scores = []
     
@@ -527,6 +527,11 @@ def find_matching_target(track_id, current_histogramm, current_person_box, frame
             continue
         
         candidate_target_id = lost_data["target_id"]
+        
+        # Target-ID wurde im aktuellen Frame bereits
+        # einer anderen Person zugeordnet.
+        if candidate_target_id in active_target_ids_current_frame:
+            continue
 
         # Eine Target-ID darf nicht bereits von einem aktuell
         # sichtbaren anderen ByteTrack verwendet werden.
@@ -612,7 +617,7 @@ def find_matching_target(track_id, current_histogramm, current_person_box, frame
 
 
 
-def assign_target_id(track_id, person_box, current_histogram, frame_idx):
+def assign_target_id(track_id, person_box, current_histogram, frame_idx, active_target_ids_current_frame):
     """
     Gibt die Target-ID einer ByteTrack-ID zurück.
 
@@ -639,7 +644,7 @@ def assign_target_id(track_id, person_box, current_histogram, frame_idx):
 
     # Im dritten Frame wurde außerhalb dieser Funktion
     # erstmals ein Histogramm berechnet.
-    match = find_matching_target(track_id, current_histogram, person_box, frame_idx)
+    match = find_matching_target(track_id, current_histogram, person_box, frame_idx, active_target_ids_current_frame)
 
     if match is not None:
 
@@ -735,7 +740,8 @@ def process_frame(frame, model, frame_idx):
     original_frame = frame.copy()
     
     
-    active_track_ids_current_frame = set()  
+    active_track_ids_current_frame = set() 
+    active_target_ids_current_frame = set() 
     
     results = model.track(frame, persist=True, tracker="bytetrack_custom.yaml", verbose=False)
     
@@ -803,7 +809,10 @@ def process_frame(frame, model, frame_idx):
             if next_pending_frame >= MIN_FRAMES_BEFORE_RELINKING:
                 current_histogram = calculate_histogram(original_frame, person_box)
         
-        target_id = assign_target_id(track_id, person_box, current_histogram, frame_idx)
+        target_id = assign_target_id(track_id, person_box, current_histogram, frame_idx, active_target_ids_current_frame)
+        
+        if track_id in track_to_target:
+            active_target_ids_current_frame.add(target_id)
         
 
         # -------------------------------------------------
