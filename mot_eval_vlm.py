@@ -526,6 +526,20 @@ def find_matching_target(track_id, current_histogramm, current_person_box, frame
         if lost_track_id in matched_lost_tracks:
             continue
         
+        candidate_target_id = lost_data["target_id"]
+
+        # Eine Target-ID darf nicht bereits von einem aktuell
+        # sichtbaren anderen ByteTrack verwendet werden.
+        target_already_active = any(
+            active_bt_id != track_id
+            and active_bt_id in track_to_target
+            and track_to_target[active_bt_id] == candidate_target_id
+            for active_bt_id in active_track_ids_last_frame
+        )
+
+        if target_already_active:
+            continue
+        
         
         # Alter und neuer Track dürfen sich zeitlich nicht überschneiden.
         # Wenn der neue Track bereits sichtbar war, bevor der alte
