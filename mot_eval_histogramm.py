@@ -257,7 +257,7 @@ def calculate_position_distance(box_a, box_b):
 
 
 
-def position_is_plausible (old_person_box, new_person_box):
+def position_is_plausible(old_person_box, new_person_box):
     """Prüft, ob die Positionsänderung für ein Re-Linking plausibel ist."""
     
     old_x1, old_y1, old_x2, old_y2 = old_person_box
@@ -275,7 +275,7 @@ def position_is_plausible (old_person_box, new_person_box):
 
 
 
-def find_matching_target(track_id, current_histogramm, current_person_box, frame_idx):
+def find_matching_target(track_id, current_histogram, current_person_box, frame_idx):
     """Sucht den besten verlorenen Track für ein mögliches Re-Linking."""
 
     
@@ -312,7 +312,7 @@ def find_matching_target(track_id, current_histogramm, current_person_box, frame
             
         
             
-        similarity = compare_person_histograms(current_histogramm, lost_histogram)
+        similarity = compare_person_histograms(current_histogram, lost_histogram)
         
         if similarity is None:
             continue
@@ -492,10 +492,7 @@ def process_frame(frame, model, frame_idx):
         }
         
         # Hier wird immer die originale ByteTrack-ID verwendet.
-        mot_results_bytetrack.append({
-            **mot_entry,
-            "id": track_id
-        })
+        mot_results_bytetrack.append({**mot_entry, "id": track_id})
 
 
         # -------------------------------------------------
@@ -535,10 +532,7 @@ def process_frame(frame, model, frame_idx):
                 finalize_pending_mot_results(track_id, target_id)
 
             # Den aktuellen Frame direkt speichern.
-            mot_results_target.append({
-                **mot_entry,
-                "id": target_id
-            })
+            mot_results_target.append({**mot_entry, "id": target_id})
 
         else:
             # Die ersten Frames eines neuen Tracks: Target-ID ist noch nicht endgültig bekannt.
@@ -693,10 +687,7 @@ def run_sequence(sequence_name):
         new_target_id = get_new_target_id(track_id)
         used_target_ids.add(new_target_id)
 
-        finalize_pending_mot_results(
-            track_id,
-            new_target_id
-        )
+        finalize_pending_mot_results(track_id, new_target_id)
 
     # Laufzeitstatistik
     if processed_frames > 0:
@@ -705,20 +696,12 @@ def run_sequence(sequence_name):
 
         processing_fps = (1.0 / average_processing_time)
 
-        print(
-            f"\nVerarbeitete Frames: "
-            f"{processed_frames}"
-        )
+        print(f"\nVerarbeitete Frames: {processed_frames}")
+        
+        print("Durchschnittliche Zeit pro Frame: "f"{average_processing_time:.4f} s")
+        
+        print("Verarbeitungsgeschwindigkeit: "f"{processing_fps:.2f} FPS")
 
-        print(
-            f"Durchschnittliche Zeit pro Frame: "
-            f"{average_processing_time:.4f} s"
-        )
-
-        print(
-            f"Verarbeitungsgeschwindigkeit: "
-            f"{processing_fps:.2f} FPS"
-        )
 
     os.makedirs("mot_results",exist_ok=True)
 
