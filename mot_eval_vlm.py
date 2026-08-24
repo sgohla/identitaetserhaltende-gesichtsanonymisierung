@@ -648,20 +648,32 @@ def find_matching_target(track_id, current_histogramm, current_person_box, frame
         )
         return None
     
+    matches = [
+        {"lost_track_id": best_lost_track_id,
+        "target_id": best_target_id,
+        "similarity": best_similarity}]
+
+    # Wenn der zweitbeste Kandidat ähnlich gut ist,
+    # soll Qwen auch diesen Kandidaten überprüfen.
     if len(candidates_scores) > 1:
-        second_best_similarity = candidates_scores[1][0]
-        
-        similarity_margin = best_similarity - second_best_similarity
-        
+        second_similarity, second_lost_track_id, second_target_id = candidates_scores[1]
+
+        similarity_margin = best_similarity - second_similarity
+
         if similarity_margin < MIN_SIMILARITY_MARGIN:
-            #print(
-                #f"Kein Re-Linking: Unterschied zwischen bestem "
-                #f"und zweitbestem Kandidaten beträgt nur "
-                #"{similarity_margin:.3f}."
-            #)
-            return None
-        
-    return {"lost_track_id": best_lost_track_id, "target_id": best_target_id, "similarity": best_similarity}
+            print(
+                f"Zwei ähnliche Kandidaten gefunden: "
+                f"{best_similarity:.3f} und {second_similarity:.3f}"
+            )
+
+            matches.append({
+                "lost_track_id": second_lost_track_id,
+                "target_id": second_target_id,
+                "similarity": second_similarity
+            })
+
+    return matches        
+
 
 
 
@@ -692,94 +704,80 @@ def assign_target_id(track_id, person_box, current_histogram, frame_idx, active_
 
     # Im dritten Frame wurde außerhalb dieser Funktion
     # erstmals ein Histogramm berechnet.
-    match = find_matching_target(track_id, current_histogram, person_box, frame_idx,active_target_ids_current_frame, active_existing_target_ids)
+    matches = find_matching_target(track_id, current_histogram, person_box, frame_idx,active_target_ids_current_frame, active_existing_target_ids)
 
-    if match is not None:
+    relink_successful = False
 
-        target_id = match["target_id"]
-        lost_track_id = match["lost_track_id"]
+    if matches is not None:
 
-        old_reference_frames = lost_tracks[
-            lost_track_id
-        ].get(
-            "reference_frames",
-            []
-        )
+        for match in matches:
+            target_id = match["target_id"]
+            lost_track_id = match["lost_track_id"]
 
-        new_reference_frames = reference_frames.get(
-            track_id,
-            []
-        )
+            old_reference_frames = lost_tracks[
+                lost_track_id
+            ].get(
+                "reference_frames",
+                []
+            )
 
-        vision_result = compare_reference_frames_with_qwen(
-            old_reference_frames,
-            new_reference_frames
-        )
+            new_reference_frames = reference_frames.get(
+                track_id,
+                []
+            )
 
-        print(
-            f"Qwen-Vergleich BT {lost_track_id} -> "
-            f"BT {track_id}: {vision_result}"
-        )
+            vision_result = compare_reference_frames_with_qwen(
+                old_reference_frames,
+                new_reference_frames
+            )
 
-        # Qwen bestätigt den Histogramm-Kandidaten
-        if vision_result == "SAME":
+            print(
+                f"Qwen-Vergleich BT {lost_track_id} -> "
+                f"BT {track_id}: {vision_result}"
+            )
+
+            if vision_result != "SAME":
+                continue
 
             if target_id_conflicts_with_pending_frames(
                 track_id,
                 target_id
             ):
-                new_target_id = get_new_target_id(track_id)
-
-                track_to_target[track_id] = new_target_id
-                used_target_ids.add(new_target_id)
-
                 print(
                     f"Re-Linking verworfen: Target {target_id} "
-                    f"war während der Pending-Frames bereits aktiv. "
-                    f"BT {track_id} -> Target {new_target_id}"
-    )
-
-            else:
-                
-                track_to_target[track_id] = target_id
-                used_target_ids.add(target_id)
-
-                track_to_target.pop(lost_track_id, None)
-
-                lost_tracks.pop(
-                    lost_track_id,
-                    None
+                    f"war während der Pending-Frames bereits aktiv."
                 )
+                continue
 
-                matched_lost_tracks.add(
-                    lost_track_id
-                )
+            track_to_target[track_id] = target_id
+            used_target_ids.add(target_id)
 
-                relinked_track_ids.add(
-                    track_id
-                )
+            track_to_target.pop(lost_track_id, None)
+            lost_tracks.pop(lost_track_id, None)
+            matched_lost_tracks.add(lost_track_id)
+            relinked_track_ids.add(track_id)
 
-                print(
-                    f"Re-Linking erfolgreich: "
-                    f"BT {track_id} -> Target {target_id} "
-                    f"(vorherige BT-ID {lost_track_id}, "
-                    f"Histogramm {match['similarity']:.3f}, "
-                    f"Qwen SAME)"
-                )
-        # Qwen lehnt Kandidaten ab
-        else:
+            print(
+                f"Re-Linking erfolgreich: "
+                f"BT {track_id} -> Target {target_id} "
+                f"(vorherige BT-ID {lost_track_id}, "
+                f"Histogramm {match['similarity']:.3f}, "
+                f"Qwen SAME)"
+            )
 
+            relink_successful = True
+            break
+    
+        
+        if not relink_successful:
             new_target_id = get_new_target_id(track_id)
 
             track_to_target[track_id] = new_target_id
             used_target_ids.add(new_target_id)
 
             print(
-                f"Re-Linking durch Qwen abgelehnt: "
-                f"BT {track_id} -> Target {new_target_id} "
-                f"(Kandidat BT {lost_track_id}, "
-                f"Histogramm {match['similarity']:.3f}, "
-                f"Qwen {vision_result})"
+                f"Keine Qwen-Zuordnung bestätigt: "
+                f"BT {track_id} -> Target {new_target_id}"
             )
     else:
         # Kein geeigneter Histogramm-Kandidat vorhanden
