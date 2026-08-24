@@ -11,6 +11,9 @@ import tempfile
 from transformers import (Qwen2_5_VLForConditionalGeneration, AutoProcessor)
 from qwen_vl_utils import process_vision_info
 
+# -------------------------------------------------
+# Konfiguration
+# -------------------------------------------------
 
 SEQUENCES = [
     "MOT17-02-FRCNN",
@@ -18,10 +21,14 @@ SEQUENCES = [
     "MOT17-09-FRCNN",
 ]
 
-# YOLO-Modell laden
+MIN_HISTOGRAM_SIMILARITY = 0.60
+MIN_FRAMES_BEFORE_RELINKING = 5
+
 model = None
 
-
+# -------------------------------------------------
+# Qwen-Modell
+# -------------------------------------------------
 QWEN_MODEL_NAME = "/fshpc/sgohla/bachelorarbeit/models/Qwen2.5-VL-7B-Instruct"
 
 qwen_model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
@@ -41,7 +48,9 @@ qwen_model.eval()
 
 
 
-# Randbereich für die Personenbox, um zu erkennen, ob sie am Rand des Frames liegt
+# -------------------------------------------------
+# Hilfsfunktionen
+# -------------------------------------------------
 
 FRAME_BORDER_MARGIN = 10
 
@@ -64,9 +73,8 @@ def touches_frame_border(person_box, frame):
 
 mot_results_bytetrack = []   # Baseline: rohe ByteTrack-IDs
 mot_results_target = []      # Erweiterung: finale Target-IDs
+pending_mot_results = {}     #Ergebnisse neuer Tracks werden bis zur endgültigen Target-ID gepuffert
 
-# Ergebnisse neuer Tracks werden bis zur endgültigen Target-ID gepuffert
-pending_mot_results = {}
 
 def finalize_pending_mot_results(track_id, target_id):
     """
@@ -89,31 +97,7 @@ def finalize_pending_mot_results(track_id, target_id):
         })
 
     del pending_mot_results[track_id]  
-    
-def target_id_conflicts_with_pending_frames(track_id, target_id):
-    """
-    Prüft, ob die gewünschte Target-ID in einem der gepufferten
-    Frames des neuen Tracks bereits von einem anderen Track verwendet wird.
-    """
-
-    pending_entries = pending_mot_results.get(track_id, [])
-
-    if not pending_entries:
-        return False
-
-    pending_frame_ids = {
-        entry["frame"]
-        for entry in pending_entries
-    }
-
-    for result in mot_results_target:
-        if (
-            result["id"] == target_id
-            and result["frame"] in pending_frame_ids
-        ):
-            return True
-
-    return False  
+     
     
 def save_mot_results(results, output_path):
     """
@@ -141,12 +125,14 @@ def save_mot_results(results, output_path):
     
     
 #----------------------------
-# Relinking mit Sprachmodell
+# VLM Referenzframes
 #----------------------------    
 
 reference_frames = {}
 
 def calculate_reference_score(person_box, confidence, frame):
+    """Bewertet die Eignung eines Personenausschnitts als Referenzframe."""
+    
     x1, y1, x2, y2 = person_box
 
     person_height = y2 - y1
@@ -165,6 +151,8 @@ def calculate_reference_score(person_box, confidence, frame):
 
 
 def update_reference_frames(track_id, frame, person_box, confidence, frame_idx):
+    """Speichert bis zu zwei geeignete Referenzframes eines Tracks."""
+    
     x1, y1, x2, y2 = person_box
 
     crop = frame[y1:y2, x1:x2]
@@ -172,11 +160,7 @@ def update_reference_frames(track_id, frame, person_box, confidence, frame_idx):
     if crop.size == 0:
         return
 
-    score = calculate_reference_score(
-        person_box,
-        confidence,
-        frame
-    )
+    score = calculate_reference_score(person_box, confidence, frame)
 
     candidate = {
         "frame_idx": frame_idx,
@@ -190,8 +174,7 @@ def update_reference_frames(track_id, frame, person_box, confidence, frame_idx):
 
     stored = reference_frames[track_id]
 
-    # Erstes Bild vorhanden, zweites aber noch nicht:
-    # nur aufnehmen, wenn genügend zeitlicher Abstand besteht
+    # Zweite Referenz nur mit ausreichendem zeitlichem Abstand speichern
     if len(stored) == 1:
         if abs(frame_idx - stored[0]["frame_idx"]) >= 8:
             stored.append(candidate)
@@ -202,26 +185,16 @@ def update_reference_frames(track_id, frame, person_box, confidence, frame_idx):
         return
 
     # Von den bereits gespeicherten Referenzen die schlechtere suchen
-    worst_index = min(
-        range(len(stored)),
-        key=lambda i: stored[i]["score"]
-    )
+    worst_index = min(range(len(stored)),key=lambda i: stored[i]["score"])
 
     other_index = 1 - worst_index
 
-    # Ersatz nur, wenn der neue Frame besser ist und
-    # genügend Abstand zur anderen Referenz besitzt
-    if (
-        score > stored[worst_index]["score"]
-        and abs(frame_idx - stored[other_index]["frame_idx"]) >= 8
-    ):
+    # Ersatz nur, wenn der neue Frame besser ist undngenügend Abstand zur anderen Referenz besitzt
+    if (score > stored[worst_index]["score"] and abs(frame_idx - stored[other_index]["frame_idx"]) >= 8):
         stored[worst_index] = candidate
 
 
-def compare_reference_frames_with_qwen(
-    old_frames,
-    new_frames
-):
+def compare_reference_frames_with_qwen(old_frames, new_frames):
 
     if len(old_frames) < 1 or len(new_frames) < 1:
         return None
@@ -236,34 +209,22 @@ def compare_reference_frames_with_qwen(
         # Alte Referenzen
         for reference in selected_old:
 
-            temp_file = tempfile.NamedTemporaryFile(
-                suffix=".jpg",
-                delete=False
-            )
+            temp_file = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False)
 
             temp_file.close()
 
-            cv2.imwrite(
-                temp_file.name,
-                reference["crop"]
-            )
+            cv2.imwrite(temp_file.name, reference["crop"])
 
             temp_paths.append(temp_file.name)
 
         # Neue Referenzen
         for reference in selected_new:
 
-            temp_file = tempfile.NamedTemporaryFile(
-                suffix=".jpg",
-                delete=False
-            )
+            temp_file = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False)
 
             temp_file.close()
 
-            cv2.imwrite(
-                temp_file.name,
-                reference["crop"]
-            )
+            cv2.imwrite(temp_file.name, reference["crop"])
 
             temp_paths.append(temp_file.name)
 
@@ -271,70 +232,64 @@ def compare_reference_frames_with_qwen(
         num_new = len(selected_new)
 
         prompt = f"""
-You are performing a person re-identification verification.
+                You are performing a person re-identification verification.
 
-The first {num_old} image(s) show the SAME physical person
-from a previously lost track.
+                The first {num_old} image(s) show the SAME physical person
+                from a previously lost track.
 
-The following {num_new} image(s) show a newly detected track.
+                The following {num_new} image(s) show a newly detected track.
 
-The candidate has already been selected because a color-histogram
-comparison found sufficiently high similarity.
+                The candidate has already been selected because a color-histogram
+                comparison found sufficiently high similarity.
 
-Therefore, similar clothing colors are already expected and must
-NOT be the main reason for deciding SAME.
+                Therefore, similar clothing colors are already expected and must
+                NOT be the main reason for deciding SAME.
 
-Compare additional clearly visible person-specific characteristics:
-- hair and hairstyle
-- body build and proportions
-- clothing design and cut
-- logos, prints, stripes and patterns
-- trousers or shorts
-- shoes
-- bags and accessories
-- facial appearance, if clearly visible
-- other distinctive characteristics
+                Compare additional clearly visible person-specific characteristics:
+                - hair and hairstyle
+                - body build and proportions
+                - clothing design and cut
+                - logos, prints, stripes and patterns
+                - trousers or shorts
+                - shoes
+                - bags and accessories
+                - facial appearance, if clearly visible
+                - other distinctive characteristics
 
-Ignore:
-- background
-- position in the image
-- camera angle
-- lighting differences
-- scale differences
+                Ignore:
+                - background
+                - position in the image
+                - camera angle
+                - lighting differences
+                - scale differences
 
-If a characteristic is hidden, blurry, cropped or uncertain,
-treat it as UNKNOWN.
+                If a characteristic is hidden, blurry, cropped or uncertain,
+                treat it as UNKNOWN.
 
-A SAME decision should be supported by multiple compatible
-characteristics beyond color similarity.
+                A SAME decision should be supported by multiple compatible
+                characteristics beyond color similarity.
 
-A DIFFERENT decision should require clear contradictory evidence.
+                A DIFFERENT decision should require clear contradictory evidence.
 
-Give one short reason.
+                Give one short reason.
 
-Then output exactly:
+                Then output exactly:
 
-REASON: <one short sentence>
-FINAL: SAME
+                REASON: <one short sentence>
+                FINAL: SAME
 
-or
+                or
 
-REASON: <one short sentence>
-FINAL: DIFFERENT
-"""
+                REASON: <one short sentence>
+                FINAL: DIFFERENT
+                """
 
         content = []
 
         for path in temp_paths:
-            content.append({
-                "type": "image",
-                "image": path
-            })
+            content.append({"type": "image", "image": path})
 
-        content.append({
-            "type": "text",
-            "text": prompt
-        })
+        content.append({"type": "text","text": prompt})
 
         messages = [
             {
@@ -343,45 +298,21 @@ FINAL: DIFFERENT
             }
         ]
 
-        text = qwen_processor.apply_chat_template(
-            messages,
-            tokenize=False,
-            add_generation_prompt=True
-        )
+        text = qwen_processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
 
-        image_inputs, video_inputs = process_vision_info(
-            messages
-        )
+        image_inputs, video_inputs = process_vision_info(messages)
 
-        inputs = qwen_processor(
-            text=[text],
-            images=image_inputs,
-            videos=video_inputs,
-            padding=True,
-            return_tensors="pt"
-        )
+        inputs = qwen_processor(text=[text], images=image_inputs, videos=video_inputs, padding=True, return_tensors="pt")
 
         inputs = inputs.to(qwen_model.device)
 
         with torch.inference_mode():
 
-            generated_ids = qwen_model.generate(
-                **inputs,
-                max_new_tokens=120,
-                do_sample=False
-            )
+            generated_ids = qwen_model.generate(**inputs, max_new_tokens=120, do_sample=False)
 
-        generated_ids_trimmed = [
-            output_ids[len(input_ids):]
-            for input_ids, output_ids
-            in zip(inputs.input_ids, generated_ids)
-        ]
+        generated_ids_trimmed = [output_ids[len(input_ids):] for input_ids, output_ids in zip(inputs.input_ids, generated_ids)]
 
-        response = qwen_processor.batch_decode(
-            generated_ids_trimmed,
-            skip_special_tokens=True,
-            clean_up_tokenization_spaces=False
-        )[0].strip()
+        response = qwen_processor.batch_decode(generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0].strip()
 
         print("\nQwen-Antwort:")
         print(response)
@@ -406,47 +337,46 @@ FINAL: DIFFERENT
     
     
 # -----------------------    
-# Abschnitt für Relinking
+# Relinking
 #------------------------
 
-#Variablen
-track_to_target = {}  # Mapping von Track-ID zu Target-ID, z.B. {1: 2} bedeutet, dass Track 1 zu Target 2 gehört
-
-used_target_ids = set()
-
+# Zuordnung und Verwaltung der Track-IDs
+track_to_target = {}                 # ByteTrack-ID -> finale Target-ID
 active_track_ids_last_frame = set()  # Menge der Track-IDs, die im letzten Frame aktiv waren
-lost_tracks = {}  # Mapping von verlorenen Track-IDs zu den Frames, in denen sie zuletzt gesehen wurden. Speichert zu Track ID: Target-ID, zuletzt gesehenes Frame, zuletzt bekannte Personenbox (x1, y1, x2, y2)
-last_person_boxes = {}  # Mapping von Track-ID zu zuletzt bekannter Personenbox (x1, y1, x2, y2)
-MIN_LOST_FRAMES_FOR_RELINKING = 2  # Mindestanzahl an Frames, die ein Track verschwunden sein muss, bevor er für Relinking in Frage kommt
-MAX_LOST_FRAMES_FOR_RELINKING = 200  # Maximale Anzahl an Frames, die ein Track verschwunden sein darf, bevor er für Relinking in Frage kommt
+lost_tracks = {}                     # Informationen zu aktuell verlorenen Tracks
+last_person_boxes = {}               #letzte bekannte Personenbox pro Track
+track_first_seen = {}                # erstes Auftreten einer Track-ID
+track_last_seen = {}                 # letztes Auftreten einer Track-ID
+used_target_ids = set()              # bereits vergebene Target-IDs
 
-person_histogram_models = {}  #geglättetes Histogramm
-HISTOGRAM_ALPHA = 0.15
-
-MIN_HISTOGRAM_SIMILARITY= 0.60
-MIN_SCORE_MARGIN = 0.10
-MIN_SIMILARITY_MARGIN = 0.08
-MAX_POSITION_DISTANCE_FACTOR = 1.5 
-
-matched_lost_tracks = set()
-relinked_track_ids = set()
+# Re-Linking-Zustand
+pending_track_frames = {}             # Anzahl beobachteter Frames vor der Zuordnung (für bessere Histogramme)
+matched_lost_tracks = set()           # bereits zugeordnete verlorene Tracks
+relinked_track_ids = set()            # erfolgreich re-gelinkte neue Track-IDs
 
 
-pending_track_frames ={}                 # paar frames abwarten bis zum Relinking, damit Histogramm aussagekräftig ist
-MIN_FRAMES_BEFORE_RELINKING = 5
-PENDING_HISTOGRAM_ALPHA = 0.30
+#Zeitliche Grenzen
+MIN_LOST_FRAMES_FOR_RELINKING = 2     # Mindestanzahl an Frames, die ein Track verschwunden sein muss, bevor er für Relinking in Frage kommt
+MAX_LOST_FRAMES_FOR_RELINKING = 200   # Nach dieser Anzahl an Frames wird ein verlorener Track nicht mehr berücksichtigt.
+MAX_TRACK_MEMORY_FRAMES = 30          # Speicherdauer nicht mehr benötigter Track-Daten
+
+#Histogram Modell
+person_histogram_models = {}   # geglättetes Histogramm
+HISTOGRAM_ALPHA = 0.15         # Gewicht des aktuellen Histogramms beim Aktualisieren des geglätteten Modells.
+MIN_SIMILARITY_MARGIN = 0.08   # Mindestabstand zwischen bestem und zweitbestem Histogramm-Kandidaten.
 
 
-track_first_seen= {}
+#Positionsüberprüfung
+MAX_POSITION_DISTANCE_FACTOR = 1.5 # Maximal erlaubte Positionsänderung relativ zur Größe der alten Personenbox.
+
+
+
+# Histogramm und Kandidatenauswahl
+# -------------------------------------------------
 
 def get_new_target_id(track_id):
-    """
-    Vergibt für eine tatsächlich neue Identität eine Target-ID.
-    Die ByteTrack-ID wird verwendet, solange diese Target-ID noch nie
-    einer Identität zugeordnet war. Andernfalls wird eine neue freie
-    Target-ID erzeugt.
-    """
-
+    """Gibt eine noch nicht verwendete Target-ID zurück."""
+    
     if track_id not in used_target_ids:
         return track_id
 
@@ -458,8 +388,10 @@ def get_new_target_id(track_id):
     return new_target_id
 
 
-# Funktion, um Kandidaten für Relinking zu erhalten
+
 def get_relinking_candidates(frame_idx):
+    """Liefert verlorene Tracks innerhalb des zulässigen Zeitfensters."""
+    
     candidates = {}
     for lost_track_id, lost_data in lost_tracks.items():
         frame_since_lost = (frame_idx - lost_data["last_seen"])
@@ -470,8 +402,10 @@ def get_relinking_candidates(frame_idx):
     return candidates
 
 
-#Histogramm der Personenbox berechnen
+
 def calculate_histogram(frame, person_box):
+    """Berechnet ein Histogramm aus dem Oberkörperbereich."""
+    
     x1, y1, x2, y2 = person_box
     frame_height, frame_width = frame.shape[:2]
     
@@ -505,7 +439,10 @@ def calculate_histogram(frame, person_box):
     return histogram
 
 
+
 def compare_person_histograms(histogram_a, histogram_b):
+    """Vergleicht zwei Histogramme anhand ihrer Korrelation."""
+    
     if histogram_a is None or histogram_b is None:
         return None
 
@@ -518,7 +455,10 @@ def compare_person_histograms(histogram_a, histogram_b):
     return float(similarity)
 
 
+
 def update_histogram_models(track_id, current_histogram):
+    """Aktualisiert das geglättete Histogramm eines Tracks."""
+    
     if current_histogram is None:
         return
     
@@ -535,7 +475,10 @@ def update_histogram_models(track_id, current_histogram):
     person_histogram_models[track_id]= updated_histogram
 
 
+
 def calculate_position_distance(box_a, box_b):
+    """Berechnet die Distanz zwischen den Mittelpunkten zweier Boxen."""
+    
     ax1, ay1, ax2, ay2 = box_a
     bx1, by1, bx2, by2 = box_b
     
@@ -547,7 +490,11 @@ def calculate_position_distance(box_a, box_b):
     
     return np.hypot(center_ax - center_bx, center_ay - center_by)
 
+
+
 def position_is_plausible (old_person_box, new_person_box):
+    """Prüft, ob die Positionsänderung für ein Re-Linking plausibel ist."""
+    
     old_x1, old_y1, old_x2, old_y2 = old_person_box
     
     old_width = old_x2 - old_x1
@@ -561,7 +508,11 @@ def position_is_plausible (old_person_box, new_person_box):
     
     return distance <= max_distance
 
-def find_matching_target(track_id, current_histogramm, current_person_box, frame_idx, active_target_ids_current_frame, active_existing_target_ids):
+    
+
+def find_matching_target(track_id, current_histogram, current_person_box, frame_idx):
+    """Sucht geeignete verlorene Tracks für eine VLM-Verifikation."""
+    
     candidates = get_relinking_candidates(frame_idx)
     candidates_scores = []
     
@@ -569,34 +520,14 @@ def find_matching_target(track_id, current_histogramm, current_person_box, frame
     
     for lost_track_id, lost_data in candidates.items():
         
+        # Bereits verwendete verlorene Tracks überspringen
         if lost_track_id in matched_lost_tracks:
             continue
         
-        candidate_target_id = lost_data["target_id"]
         
-        if candidate_target_id in active_existing_target_ids:
-            continue
-        
-        if candidate_target_id in active_target_ids_current_frame:
-            continue
-        
-
-        # Eine Target-ID darf nicht bereits von einem aktuell
-        # sichtbaren anderen ByteTrack verwendet werden.
-        target_already_active = any(
-            active_bt_id != track_id
-            and active_bt_id in track_to_target
-            and track_to_target[active_bt_id] == candidate_target_id
-            for active_bt_id in active_track_ids_last_frame
-        )
-
-        if target_already_active:
-            continue
-        
-        
-        # Alter und neuer Track dürfen sich zeitlich nicht überschneiden.
-        # Wenn der neue Track bereits sichtbar war, bevor der alte
-        # Track verschwunden ist, können beide nicht dieselbe Person sein.
+        # Neue Tracks werden zunächst mehrere Frames beobachtet und anschließend rückwirkend
+        # einer Target-ID zugeordnet. Ein verlorener Track kommt daher nur infrage, wenn er 
+        # bereits vor dem ersten Auftreten des neuen Tracks verschwunden war.
         if first_new_track_frame <= lost_data["last_seen"]:
             continue
 
@@ -605,6 +536,7 @@ def find_matching_target(track_id, current_histogramm, current_person_box, frame
         if lost_histogram is None:
             continue
         
+        # Bei Tracks, die nicht am Bildrand verschwunden sind, muss die neue Position zusätzlich plausibel sein
         if not lost_data["left_from_border"]:
             if not position_is_plausible(lost_data["person_box"], current_person_box):
                 #print(f"Kandidat BT {lost_track_id} wurde wegen unplausibler Position ausgeschlossen.")
@@ -612,22 +544,17 @@ def find_matching_target(track_id, current_histogramm, current_person_box, frame
             
         
             
-        similarity = compare_person_histograms(current_histogramm, lost_histogram)
+        similarity = compare_person_histograms(current_histogram, lost_histogram)
         
         if similarity is None:
             continue
-        
-        #print(
-            #f"Vergleich mit verlorenem BT {lost_track_id} "
-            #f"(Target {lost_data['target_id']}): "
-            #f"Histogramm-Ähnlichkeit = {similarity:.3f}, "
-            #f"Randverlust = {lost_data['left_from_border']}" )
         
         candidates_scores.append((similarity, lost_track_id, lost_data["target_id"]))
         
     if not candidates_scores:
         return None
     
+    # Kandidaten nach Histogramm-Ähnlichkeit sortieren
     candidates_scores.sort(key= lambda candidate: candidate[0], reverse=True)
     
     print("Ranking der Re-Linking-Kandidaten:")
@@ -640,6 +567,7 @@ def find_matching_target(track_id, current_histogramm, current_person_box, frame
     
     best_similarity, best_lost_track_id, best_target_id = candidates_scores[0]
     
+    # Mindestähnlichkeit prüfen
     if best_similarity < MIN_HISTOGRAM_SIMILARITY:
         print (
             f"Kein Re-Linking: Beste Ähnlichkeit "
@@ -653,14 +581,13 @@ def find_matching_target(track_id, current_histogramm, current_person_box, frame
         "target_id": best_target_id,
         "similarity": best_similarity}]
 
-    # Wenn der zweitbeste Kandidat ähnlich gut ist,
-    # soll Qwen auch diesen Kandidaten überprüfen.
+    # Wenn der zweitbeste Kandidat ähnlich gut ist, soll Qwen auch diesen Kandidaten überprüfen.
     if len(candidates_scores) > 1:
         second_similarity, second_lost_track_id, second_target_id = candidates_scores[1]
 
         similarity_margin = best_similarity - second_similarity
 
-        if similarity_margin < MIN_SIMILARITY_MARGIN:
+        if (second_similarity >= MIN_HISTOGRAM_SIMILARITY and similarity_margin < MIN_SIMILARITY_MARGIN):
             print(
                 f"Zwei ähnliche Kandidaten gefunden: "
                 f"{best_similarity:.3f} und {second_similarity:.3f}"
@@ -677,14 +604,14 @@ def find_matching_target(track_id, current_histogramm, current_person_box, frame
 
 
 
-def assign_target_id(track_id, person_box, current_histogram, frame_idx, active_target_ids_current_frame, active_existing_target_ids):
+def assign_target_id(track_id, person_box, current_histogram, frame_idx):
     """
-    Gibt die Target-ID einer ByteTrack-ID zurück.
+    Bestimmt die finale Target-ID einer ByteTrack-ID.
 
-    Bekannte ByteTrack-IDs behalten ihre vorhandene Zuordnung.
-    Neue IDs werden zunächst zwei Frames lang beobachtet.
-    Im dritten Frame wird einmalig ein Re-Linking-Versuch
-    mit dem dann aktuellen Histogramm durchgeführt.
+    Bereits bekannte Track-IDs behalten ihre Zuordnung. Neue Track-IDs
+    werden zunächst über mehrere Frames beobachtet. Nach Ablauf der
+    Pending-Phase wird einmalig versucht, sie mit einem verlorenen Track
+    zu verknüpfen.
     """
 
     # Die ByteTrack-ID wurde bereits endgültig zugeordnet.
@@ -696,15 +623,12 @@ def assign_target_id(track_id, person_box, current_histogram, frame_idx, active_
 
     pending_frames = pending_track_frames[track_id]
 
-    # In Frame 1 und 2 noch keine endgültige Entscheidung.
-    # Vorläufig wird Target = ByteTrack zurückgegeben,
-    # aber nicht in track_to_target gespeichert.
+    # Während der Pending-Phase noch keine endgültige Zuordnung speichern
     if pending_frames < MIN_FRAMES_BEFORE_RELINKING:
         return track_id
 
-    # Im dritten Frame wurde außerhalb dieser Funktion
-    # erstmals ein Histogramm berechnet.
-    matches = find_matching_target(track_id, current_histogram, person_box, frame_idx,active_target_ids_current_frame, active_existing_target_ids)
+    # Nach Ablauf der Pending-Phase einmalig nach einem passenden verlorenen Track suchen (bzw. zwei bei ähnlich guten Histogramm-Kandidaten)
+    matches = find_matching_target(track_id, current_histogram, person_box, frame_idx)
 
     relink_successful = False
 
@@ -714,22 +638,11 @@ def assign_target_id(track_id, person_box, current_histogram, frame_idx, active_
             target_id = match["target_id"]
             lost_track_id = match["lost_track_id"]
 
-            old_reference_frames = lost_tracks[
-                lost_track_id
-            ].get(
-                "reference_frames",
-                []
-            )
+            old_reference_frames = lost_tracks[lost_track_id].get("reference_frames",[])
 
-            new_reference_frames = reference_frames.get(
-                track_id,
-                []
-            )
+            new_reference_frames = reference_frames.get(track_id,[])
 
-            vision_result = compare_reference_frames_with_qwen(
-                old_reference_frames,
-                new_reference_frames
-            )
+            vision_result = compare_reference_frames_with_qwen(old_reference_frames, new_reference_frames)
 
             print(
                 f"Qwen-Vergleich BT {lost_track_id} -> "
@@ -737,16 +650,6 @@ def assign_target_id(track_id, person_box, current_histogram, frame_idx, active_
             )
 
             if vision_result != "SAME":
-                continue
-
-            if target_id_conflicts_with_pending_frames(
-                track_id,
-                target_id
-            ):
-                print(
-                    f"Re-Linking verworfen: Target {target_id} "
-                    f"war während der Pending-Frames bereits aktiv."
-                )
                 continue
 
             track_to_target[track_id] = target_id
@@ -781,7 +684,6 @@ def assign_target_id(track_id, person_box, current_histogram, frame_idx, active_
             )
     else:
         # Kein geeigneter Histogramm-Kandidat vorhanden
-    
         new_target_id = get_new_target_id(track_id)
 
         track_to_target[track_id] = new_target_id
@@ -800,11 +702,9 @@ def assign_target_id(track_id, person_box, current_histogram, frame_idx, active_
     return track_to_target[track_id]
     
 
-    
-
-track_last_seen = {}
-MAX_TRACK_MEMORY_FRAMES = 30
-
+# -------------------------------------------------
+# Frame-Verarbeitung
+# -------------------------------------------------
 
 def process_frame(frame, model, frame_idx):
     
@@ -812,33 +712,16 @@ def process_frame(frame, model, frame_idx):
     
     original_frame = frame.copy()
     
-    
     active_track_ids_current_frame = set() 
-    active_target_ids_current_frame = set() 
-    
+
+    # Persondetektion und Tracking
     results = model.track(frame, persist=True, tracker="bytetrack_custom.yaml", verbose=False)
     
     boxes = results[0].boxes
     
-    active_existing_target_ids = set()
-
     for box in boxes:
-        if box.id is None:
-            continue
-
-        cls = int(box.cls[0])
-
-        if cls != 0:
-            continue
-
-        current_track_id = int(box.id[0])
-
-        if current_track_id in track_to_target:
-            active_existing_target_ids.add(
-                track_to_target[current_track_id]
-        )
-    
-    for box in boxes:
+        
+        #Track-Informationen auslesen
         x1, y1, x2, y2 = box.xyxy[0].cpu().numpy().astype(int) # Koordinaten der Box
         cls = int(box.cls[0]) # Klasse als Integer
         conf = float(box.conf[0])# Konfidenz als Float
@@ -856,6 +739,7 @@ def process_frame(frame, model, frame_idx):
         
         active_track_ids_current_frame.add(track_id)  # Track-ID als aktiv markieren
         
+        # Falls ByteTrack dieselbe ID wieder aufnimmt, wird sie nicht länger als verloren geführt
         if track_id in lost_tracks:
             lost_tracks.pop(track_id, None)
             print(f"Track-ID {track_id} wurde wiedergefunden und aus den verlorenen Tracks entfernt.")
@@ -865,10 +749,15 @@ def process_frame(frame, model, frame_idx):
         
         person_box = (x1, y1, x2, y2)
         
+        last_person_boxes[track_id] = person_box  # Speichern der zuletzt bekannten Personenbox 
+        
+        # Referenzframes für die spätere VLM-Verifikation aktualisieren
         update_reference_frames(track_id, original_frame, person_box, conf, frame_idx)
         
 
-        # MOT-Eintrag für diesen Frame vorbereiten
+        # -------------------------------------------------
+        # ByteTrack-Baseline für die MOT-Evaluation
+        # -------------------------------------------------
         mot_entry = {
             "frame": frame_idx,
             "x": x1,
@@ -878,31 +767,33 @@ def process_frame(frame, model, frame_idx):
             "conf": conf
         }
 
-        # ByteTrack-Baseline:
-        # Hier wird immer die originale ByteTrack-ID verwendet.
-        mot_results_bytetrack.append({
-            **mot_entry,
-            "id": track_id
-        })
+        # ByteTrack-Baseline: Hier wird immer die originale ByteTrack-ID verwendet.
+        mot_results_bytetrack.append({**mot_entry, "id": track_id})
 
         
-        last_person_boxes[track_id] = person_box  # Speichern der zuletzt bekannten Personenbox 
+        
+        # -------------------------------------------------
+        # Histogramm berechnen bzw. aktualisieren
+        # -------------------------------------------------
         
         current_histogram = None
         
         if track_id in track_to_target:
+            # Bereits bestätigte Tracks aktualisieren ihr Histogrammmodell
             current_histogram = calculate_histogram(original_frame, person_box)
             update_histogram_models(track_id, current_histogram)
             
         else:
+            # Bei neuen Tracks wird das Histogramm erst am Ende der Pending-Phase für den Re-Linking-Versuch benötigt
             next_pending_frame = (pending_track_frames.get(track_id,0 ) +1)
             if next_pending_frame >= MIN_FRAMES_BEFORE_RELINKING:
                 current_histogram = calculate_histogram(original_frame, person_box)
+                
+        # -------------------------------------------------
+        # Target-ID bestimmen
+        # -------------------------------------------------
         
-        target_id = assign_target_id(track_id, person_box, current_histogram, frame_idx, active_target_ids_current_frame, active_existing_target_ids)
-        
-        if track_id in track_to_target:
-            active_target_ids_current_frame.add(target_id)
+        target_id = assign_target_id(track_id, person_box, current_histogram, frame_idx)
         
 
         # -------------------------------------------------
@@ -913,28 +804,26 @@ def process_frame(frame, model, frame_idx):
             # Die Target-ID ist endgültig bekannt.
 
             if track_id in pending_mot_results:
-                # Die vorherigen Pending-Frames rückwirkend
-                # mit der jetzt bekannten Target-ID speichern.
+                # Die vorherigen Pending-Frames rückwirkend mit der jetzt bekannten Target-ID speichern.
                 finalize_pending_mot_results(track_id, target_id)
 
             # Den aktuellen Frame direkt speichern.
-            mot_results_target.append({
-                **mot_entry,
-                "id": target_id
-            })
+            mot_results_target.append({**mot_entry, "id": target_id})
 
         else:
-            # Die ersten Frames eines neuen Tracks:
-            # Target-ID ist noch nicht endgültig bekannt.
+            # Die ersten Frames eines neuen Tracks: Target-ID ist noch nicht endgültig bekannt.
             pending_mot_results.setdefault(track_id, []).append(mot_entry)
         
+        # Falls für einen neuen Track erstmals ein Histogramm berechnet wurde, wird es als Ausgangsmodell gespeichert
         if (track_id in track_to_target and current_histogram is not None and track_id not in person_histogram_models):
             person_histogram_models[track_id] = current_histogram.copy()
         
         
         
         
-    # Überprüfung auf verschwundene Tracks und Speicherung der letzten bekannten Positionen
+    # -------------------------------------------------
+    # Verschwundene Tracks speichern
+    # -------------------------------------------------
     disappeared_track_ids = (active_track_ids_last_frame- active_track_ids_current_frame)
 
     for disappeared_track_id in disappeared_track_ids:
@@ -989,6 +878,10 @@ def process_frame(frame, model, frame_idx):
 
     return frame
 
+# -------------------------------------------------
+# Sequenzverarbeitung
+# -------------------------------------------------
+
 def run_sequence(sequence_name):
     global track_to_target
     global active_track_ids_last_frame
@@ -1007,25 +900,22 @@ def run_sequence(sequence_name):
     global model
     global used_target_ids
     
-    used_target_ids = set()
+    # Zustände für jede Sequenz zurücksetzen
     track_to_target = {}
     active_track_ids_last_frame = set()
     lost_tracks = {}
     last_person_boxes = {}
-
     person_histogram_models = {}
     matched_lost_tracks = set()
     relinked_track_ids = set()
-
     pending_track_frames = {}
     track_first_seen = {}
-
     reference_frames = {}
     track_last_seen = {}
-
     mot_results_bytetrack = []
     mot_results_target = []
     pending_mot_results = {}
+    used_target_ids = set()
 
     # ByteTrack-Zustand ebenfalls neu starten
     model = YOLO("yolov8m.pt")
@@ -1049,7 +939,7 @@ def run_sequence(sequence_name):
 
     frame_idx = 0
 
-
+    # Frames der Sequenz verarbeiten
     for image_path in image_paths:
 
         frame = cv2.imread(str(image_path))
@@ -1073,22 +963,15 @@ def run_sequence(sequence_name):
     
             
 
-    # -------------------------------------------------
-    # Noch offene Pending-Tracks für die MOT-Evaluation
-    # abschließen
-    # -------------------------------------------------
-
+    # Noch offene Pending-Tracks am Ende der Sequenz abschließen
     for track_id in list(pending_mot_results.keys()):
         new_target_id = get_new_target_id(track_id)
         used_target_ids.add(new_target_id)
 
-        finalize_pending_mot_results(
-            track_id,
-            new_target_id
-        )
+        finalize_pending_mot_results(track_id, new_target_id)
 
 
-        
+    # Laufzeitstatistik
     if processed_frames > 0:
 
         average_processing_time = (total_processing_time / processed_frames)
@@ -1101,25 +984,16 @@ def run_sequence(sequence_name):
 
         print("Verarbeitungsgeschwindigkeit: "f"{processing_fps:.2f} FPS")
         
-    os.makedirs(
-        "mot_results",
-        exist_ok=True
-    )
+    os.makedirs("mot_results", exist_ok=True)
 
     hist_tag = f"{int(MIN_HISTOGRAM_SIMILARITY * 100):03d}"
     pending_tag = MIN_FRAMES_BEFORE_RELINKING
 
     config_tag = f"h{hist_tag}_p{pending_tag}"
+    save_mot_results(mot_results_bytetrack, f"mot_results/{video_name}_bytetrack_{config_tag}.txt")
 
-    save_mot_results(
-        mot_results_bytetrack,
-        f"mot_results/{video_name}_bytetrack_{config_tag}.txt"
-    )
-
-    save_mot_results(
-        mot_results_target,
-        f"mot_results/{video_name}_qwen_{config_tag}.txt"
-    )
+    save_mot_results(mot_results_target, f"mot_results/{video_name}_qwen_{config_tag}.txt")
+    
     
 
     print("\nMOT-Evaluationsergebnisse gespeichert:")
@@ -1136,6 +1010,8 @@ def run_sequence(sequence_name):
     print(f"Target-Einträge: {len(mot_results_target)}")
     
     
-    
+# -------------------------------------------------
+# Programmausführung
+# -------------------------------------------------  
 for sequence_name in SEQUENCES:
     run_sequence(sequence_name)
