@@ -3,10 +3,8 @@
 import time
 import os
 import cv2
-import torch
 from ultralytics import YOLO
 import numpy as np
-import torchvision
 from insightface.app import FaceAnalysis
 
 # YOLO-Modell laden
@@ -137,10 +135,9 @@ def touches_frame_border(person_box, frame):
 face_kalman_filters = {}
 face_missing_frames = {}
 last_face_sizes = {}
-
-max_missing_frames = 4
-
 face_detection_counts = {}
+
+MAX_MISSING_FRAMES = 4
 MIN_FACE_DETECTIONS_FOR_KALMAN = 4
 
 
@@ -459,7 +456,7 @@ def process_frame(frame, model, face_detector, frame_idx):
                 track_id in face_kalman_filters
                 and track_id in last_face_sizes
                 and detection_count >= MIN_FACE_DETECTIONS_FOR_KALMAN
-                and missing_frames < max_missing_frames
+                and missing_frames < MAX_MISSING_FRAMES
             ):
                 predicted_face_box = predict_face_box(face_kalman_filters[track_id], last_face_sizes[track_id], frame)
 
@@ -467,13 +464,13 @@ def process_frame(frame, model, face_detector, frame_idx):
                     anonymize_face(frame, predicted_face_box)
 
                     # Nur zum Testen
-                    cv2.rectangle(
-                        frame,
-                        (predicted_face_box[0], predicted_face_box[1]),
-                        (predicted_face_box[2], predicted_face_box[3]),
-                        (0, 165, 255),
-                        2
-                    )
+                    # cv2.rectangle(
+                    #     frame,
+                    #     (predicted_face_box[0], predicted_face_box[1]),
+                    #     (predicted_face_box[2], predicted_face_box[3]),
+                    #     (0, 165, 255),
+                    #     2
+                    # )
 
                 face_missing_frames[track_id] = missing_frames + 1
             

@@ -4,10 +4,7 @@
 import time
 import os
 import cv2
-import torch
 from ultralytics import YOLO
-import numpy as np
-import torchvision
 from insightface.app import FaceAnalysis
 
 # YOLO-Modell laden

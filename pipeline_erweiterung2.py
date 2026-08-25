@@ -1,13 +1,26 @@
-# Pipeline mit Relinking (komplett)
+# Pipeline mit Histogramm-Relinking (weiterhin Kalman etc. für Stabilierung der Gesichtserkennung + -anonymisierung)
 
 import time
 import os
 import cv2
-import torch
 from ultralytics import YOLO
 import numpy as np
-import torchvision
 from insightface.app import FaceAnalysis
+
+
+# -------------------------------------------------
+# Konfiguration
+# -------------------------------------------------
+video_path = "Testvideos/TownCentre.mp4"
+SAVE_VIDEO = False
+
+MIN_HISTOGRAM_SIMILARITY = 0.70
+MIN_FRAMES_BEFORE_RELINKING = 15
+
+
+# -------------------------------------------------
+# Modelle
+# -------------------------------------------------
 
 # YOLO-Modell laden
 model = YOLO("yolov8m.pt")
@@ -28,8 +41,9 @@ face_detector.prepare(
 )
 
 
-# Eingabevideo
-video_path = "Testvideos/TownCentre.mp4"
+# -------------------------------------------------
+# Videoein- und -ausgabe
+# -------------------------------------------------
 
 cap = cv2.VideoCapture(video_path)
 
@@ -44,12 +58,10 @@ fps = cap.get(cv2.CAP_PROP_FPS)
 print(f"fps: {fps}")
 
 # VideoWriter-Objekt erstellen, um das Ergebnisvideo zu speichern
-save_video = False 
-fourcc = cv2.VideoWriter_fourcc(*"mp4v")
 video_writer = None
 OUTPUT_FPS = 45.0
 
-if save_video:
+if SAVE_VIDEO:
 
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
 
@@ -60,10 +72,14 @@ if save_video:
         (frame_width, frame_height)
     )
 
+
+# -----------------------
 # Selektives Tracking
+# -----------------------
+
 show_all_tracks = False # Wenn True, werden alle Tracks angezeigt, False: nur ausgewählten
 
-selected_track_ids = set() # Set zum Speichern der ausgewählten Track-IDs
+selected_target_ids = set() # Set zum Speichern der ausgewählten Track-IDs
 
 current_tracks = [] # Welche IDs sind gerade wo sichtbar? Koordinaten werden dann bei Mausklick verglichen. Aufbau: (track_id, x1, y1, x2, y2)
 
@@ -79,12 +95,12 @@ def mouse_click(event, x, y, flags, param):
 
         if x1 <= x <= x2 and y1 <= y <= y2:
 
-            if target_id in selected_track_ids:
-                selected_track_ids.remove(target_id)
+            if target_id in selected_target_ids:
+                selected_target_ids.remove(target_id)
                 print(f"Target-ID {target_id} wurde abgewählt.")
 
             else:
-                selected_track_ids.add(target_id)
+                selected_target_ids.add(target_id)
                 print(f"Target-ID {target_id} wurde ausgewählt.")
 
             break
@@ -96,7 +112,9 @@ cv2.setMouseCallback(window_name, mouse_click)
 
 
 
-# Farben für Track-IDs definieren
+# -------------------------------------------------
+# Farben für Target-IDs
+# -------------------------------------------------
 
 ID_COLORS = [
     (255, 204, 204),  # Pastellrosa
@@ -114,11 +132,17 @@ ID_COLORS = [
 def get_color_for_id(track_id):
     return ID_COLORS[track_id % len(ID_COLORS)]
 
-# Randbereich für die Personenbox, um zu erkennen, ob sie am Rand des Frames liegt
+
+
+# -------------------------------------------------
+# Randüberprüfung
+# -------------------------------------------------
 
 FRAME_BORDER_MARGIN = 10
 
+
 def touches_frame_border(person_box, frame):
+    """Prüft, ob eine Personenbox den definierten Bildrand berührt."""
 
     x1, y1, x2, y2 = person_box
 
@@ -128,41 +152,68 @@ def touches_frame_border(person_box, frame):
         x1 <= FRAME_BORDER_MARGIN
         or y1 <= FRAME_BORDER_MARGIN
         or x2 >= frame_width - FRAME_BORDER_MARGIN
-        or y2 >= frame_height - FRAME_BORDER_MARGIN)
+        or y2 >= frame_height - FRAME_BORDER_MARGIN
+    )
+
     
-    
-    
+
+
 # -----------------------    
-# Abschnitt für Relinking
+# Relinking
 #------------------------
 
-#Variablen
-track_to_target = {}  # Mapping von Track-ID zu Target-ID, z.B. {1: 2} bedeutet, dass Track 1 zu Target 2 gehört
+# Zuordnung und Verwaltung der Track-IDs
+track_to_target = {}                 # ByteTrack-ID -> finale Target-ID
 active_track_ids_last_frame = set()  # Menge der Track-IDs, die im letzten Frame aktiv waren
-lost_tracks = {}  # Mapping von verlorenen Track-IDs zu den Frames, in denen sie zuletzt gesehen wurden. Speichert zu Track ID: Target-ID, zuletzt gesehenes Frame, zuletzt bekannte Personenbox (x1, y1, x2, y2)
-last_person_boxes = {}  # Mapping von Track-ID zu zuletzt bekannter Personenbox (x1, y1, x2, y2)
-MIN_LOST_FRAMES_FOR_RELINKING = 2  # Mindestanzahl an Frames, die ein Track verschwunden sein muss, bevor er für Relinking in Frage kommt
-MAX_LOST_FRAMES_FOR_RELINKING = 200  # Maximale Anzahl an Frames, die ein Track verschwunden sein darf, bevor er für Relinking in Frage kommt
+lost_tracks = {}                     # Informationen zu aktuell verlorenen Tracks
+last_person_boxes = {}               #letzte bekannte Personenbox pro Track
+track_first_seen = {}                # erstes Auftreten einer Track-ID
+track_last_seen = {}                 # letztes Auftreten einer Track-ID
+used_target_ids = set()              # bereits vergebene Target-IDs
 
-person_histogram_models = {}  #geglättetes Histogramm
-HISTOGRAM_ALPHA = 0.15
-
-MIN_HISTOGRAM_SIMILARITY= 0.70
-MIN_SCORE_MARGIN = 0.10
-MIN_SIMILARITY_MARGIN = 0.08
-MAX_POSITION_DISTANCE_FACTOR = 1.5 
-
-matched_lost_tracks = set()
-relinked_track_ids = set()
+# Re-Linking-Zustand
+pending_track_frames = {}             # Anzahl beobachteter Frames vor der Zuordnung (für bessere Histogramme)
+matched_lost_tracks = set()           # bereits zugeordnete verlorene Tracks
+relinked_track_ids = set()            # erfolgreich re-gelinkte neue Track-IDs
 
 
-pending_track_frames ={}                 # paar frames abwarten bis zum Relinking, damit Histogramm aussagekräftig ist
-MIN_FRAMES_BEFORE_RELINKING = 15
-PENDING_HISTOGRAM_ALPHA = 0.30
+#Zeitliche Grenzen
+MIN_LOST_FRAMES_FOR_RELINKING = 2     # Mindestanzahl an Frames, die ein Track verschwunden sein muss, bevor er für Relinking in Frage kommt
+MAX_LOST_FRAMES_FOR_RELINKING = 200   # Nach dieser Anzahl an Frames wird ein verlorener Track nicht mehr berücksichtigt.
+MAX_TRACK_MEMORY_FRAMES = 30          # Speicherdauer nicht mehr benötigter Track-Daten
+
+#Histogram Modell
+person_histogram_models = {}   # geglättetes Histogramm
+HISTOGRAM_ALPHA = 0.15         # Gewicht des aktuellen Histogramms beim Aktualisieren des geglätteten Modells.
+MIN_SIMILARITY_MARGIN = 0.08   # Mindestabstand zwischen bestem und zweitbestem Histogramm-Kandidaten.
 
 
-# Funktion, um Kandidaten für Relinking zu erhalten
+#Positionsüberprüfung
+MAX_POSITION_DISTANCE_FACTOR = 1.5 # Maximal erlaubte Positionsänderung relativ zur Größe der alten Personenbox.
+
+
+
+# Histogramm und Kandidatenauswahl
+# -------------------------------------------------
+
+
+def get_new_target_id(track_id):
+    """Gibt eine noch nicht verwendete Target-ID zurück."""
+
+    if track_id not in used_target_ids:
+        return track_id
+
+    new_target_id = max(used_target_ids, default=0) + 1
+
+    while new_target_id in used_target_ids:
+        new_target_id += 1
+
+    return new_target_id
+
+
 def get_relinking_candidates(frame_idx):
+    """Liefert verlorene Tracks innerhalb des zulässigen Zeitfensters."""
+    
     candidates = {}
     for lost_track_id, lost_data in lost_tracks.items():
         frame_since_lost = (frame_idx - lost_data["last_seen"])
@@ -173,8 +224,10 @@ def get_relinking_candidates(frame_idx):
     return candidates
 
 
-#Histogramm der Personenbox berechnen
+
 def calculate_histogram(frame, person_box):
+    """Berechnet ein Histogramm aus dem Oberkörperbereich."""
+    
     x1, y1, x2, y2 = person_box
     frame_height, frame_width = frame.shape[:2]
     
@@ -208,7 +261,10 @@ def calculate_histogram(frame, person_box):
     return histogram
 
 
+
 def compare_person_histograms(histogram_a, histogram_b):
+    """Vergleicht zwei Histogramme anhand ihrer Korrelation."""
+    
     if histogram_a is None or histogram_b is None:
         return None
 
@@ -221,7 +277,10 @@ def compare_person_histograms(histogram_a, histogram_b):
     return float(similarity)
 
 
+
 def update_histogram_models(track_id, current_histogram):
+    """Aktualisiert das geglättete Histogramm eines Tracks."""
+    
     if current_histogram is None:
         return
     
@@ -238,7 +297,10 @@ def update_histogram_models(track_id, current_histogram):
     person_histogram_models[track_id]= updated_histogram
 
 
+
 def calculate_position_distance(box_a, box_b):
+    """Berechnet die Distanz zwischen den Mittelpunkten zweier Boxen."""
+    
     ax1, ay1, ax2, ay2 = box_a
     bx1, by1, bx2, by2 = box_b
     
@@ -250,7 +312,11 @@ def calculate_position_distance(box_a, box_b):
     
     return np.hypot(center_ax - center_bx, center_ay - center_by)
 
-def position_is_plausible (old_person_box, new_person_box):
+
+
+def position_is_plausible(old_person_box, new_person_box):
+    """Prüft, ob die Positionsänderung für ein Re-Linking plausibel ist."""
+    
     old_x1, old_y1, old_x2, old_y2 = old_person_box
     
     old_width = old_x2 - old_x1
@@ -264,18 +330,37 @@ def position_is_plausible (old_person_box, new_person_box):
     
     return distance <= max_distance
 
-def find_matching_target(current_histogramm, current_person_box, frame_idx):
+
+
+def find_matching_target(track_id, current_histogram, current_person_box, frame_idx):
+    """Sucht den besten verlorenen Track für ein mögliches Re-Linking."""
+
+    
     candidates = get_relinking_candidates(frame_idx)
     candidates_scores = []
     
+    first_new_track_frame = track_first_seen.get(track_id, frame_idx)
+    
     for lost_track_id, lost_data in candidates.items():
         
+        # Bereits verwendete verlorene Tracks überspringen
         if lost_track_id in matched_lost_tracks:
             continue
+        
+        
+        # Neue Tracks werden zunächst mehrere Frames beobachtet und anschließend rückwirkend
+        # einer Target-ID zugeordnet. Ein verlorener Track kommt daher nur infrage, wenn er 
+        # bereits vor dem ersten Auftreten des neuen Tracks verschwunden war.
+        if first_new_track_frame <= lost_data["last_seen"]:
+            continue
+
         
         lost_histogram = lost_data["histogram"]
         if lost_histogram is None:
             continue
+        
+        
+        # Bei Tracks, die nicht am Bildrand verschwunden sind, muss die neue Position zusätzlich plausibel sein
         
         if not lost_data["left_from_border"]:
             if not position_is_plausible(lost_data["person_box"], current_person_box):
@@ -284,22 +369,17 @@ def find_matching_target(current_histogramm, current_person_box, frame_idx):
             
         
             
-        similarity = compare_person_histograms(current_histogramm, lost_histogram)
+        similarity = compare_person_histograms(current_histogram, lost_histogram)
         
         if similarity is None:
             continue
-        
-        #print(
-            #f"Vergleich mit verlorenem BT {lost_track_id} "
-            #f"(Target {lost_data['target_id']}): "
-            #f"Histogramm-Ähnlichkeit = {similarity:.3f}, "
-            #f"Randverlust = {lost_data['left_from_border']}" )
         
         candidates_scores.append((similarity, lost_track_id, lost_data["target_id"]))
         
     if not candidates_scores:
         return None
     
+    # Kandidaten nach Histogramm-Ähnlichkeit sortieren
     candidates_scores.sort(key= lambda candidate: candidate[0], reverse=True)
     
     print("Ranking der Re-Linking-Kandidaten:")
@@ -312,6 +392,7 @@ def find_matching_target(current_histogramm, current_person_box, frame_idx):
     
     best_similarity, best_lost_track_id, best_target_id = candidates_scores[0]
     
+    # Mindestähnlichkeit prüfen
     if best_similarity < MIN_HISTOGRAM_SIMILARITY:
         print (
             f"Kein Re-Linking: Beste Ähnlichkeit "
@@ -320,17 +401,14 @@ def find_matching_target(current_histogramm, current_person_box, frame_idx):
         )
         return None
     
+    # Abstand zum zweitbesten Kandidaten prüfen
     if len(candidates_scores) > 1:
         second_best_similarity = candidates_scores[1][0]
         
         similarity_margin = best_similarity - second_best_similarity
         
         if similarity_margin < MIN_SIMILARITY_MARGIN:
-            #print(
-                #f"Kein Re-Linking: Unterschied zwischen bestem "
-                #f"und zweitbestem Kandidaten beträgt nur "
-                #"{similarity_margin:.3f}."
-            #)
+            
             return None
         
     return {"lost_track_id": best_lost_track_id, "target_id": best_target_id, "similarity": best_similarity}
@@ -339,13 +417,14 @@ def find_matching_target(current_histogramm, current_person_box, frame_idx):
 
 def assign_target_id(track_id, person_box, current_histogram, frame_idx):
     """
-    Gibt die Target-ID einer ByteTrack-ID zurück.
+    Bestimmt die finale Target-ID einer ByteTrack-ID.
 
-    Bekannte ByteTrack-IDs behalten ihre vorhandene Zuordnung.
-    Neue IDs werden zunächst zwei Frames lang beobachtet.
-    Im dritten Frame wird einmalig ein Re-Linking-Versuch
-    mit dem dann aktuellen Histogramm durchgeführt.
+    Bereits bekannte Track-IDs behalten ihre Zuordnung. Neue Track-IDs
+    werden zunächst über mehrere Frames beobachtet. Nach Ablauf der
+    Pending-Phase wird einmalig versucht, sie mit einem verlorenen Track
+    zu verknüpfen.
     """
+
 
     # Die ByteTrack-ID wurde bereits endgültig zugeordnet.
     if track_id in track_to_target:
@@ -356,15 +435,12 @@ def assign_target_id(track_id, person_box, current_histogram, frame_idx):
 
     pending_frames = pending_track_frames[track_id]
 
-    # In Frame 1 und 2 noch keine endgültige Entscheidung.
-    # Vorläufig wird Target = ByteTrack zurückgegeben,
-    # aber nicht in track_to_target gespeichert.
+    # Während der Pending-Phase noch keine endgültige Zuordnung speichern
     if pending_frames < MIN_FRAMES_BEFORE_RELINKING:
         return track_id
 
-    # Im dritten Frame wurde außerhalb dieser Funktion
-    # erstmals ein Histogramm berechnet.
-    match = find_matching_target(current_histogram, person_box, frame_idx)
+    # Nach Ablauf der Pending-Phase einmalig nach einem passenden verlorenen Track suchen
+    match = find_matching_target(track_id, current_histogram, person_box, frame_idx)
 
     if match is not None:
         target_id = match["target_id"]
@@ -372,6 +448,10 @@ def assign_target_id(track_id, person_box, current_histogram, frame_idx):
 
         # Neue ByteTrack-ID mit der alten Target-ID verbinden
         track_to_target[track_id] = target_id
+        used_target_ids.add(target_id)
+
+        # Alte ByteTrack-ID darf nicht dauerhaft dieselbe Target-ID behalten
+        track_to_target.pop(lost_track_id, None)
 
         # Der alte Kandidat darf nicht noch einmal verwendet werden
         lost_tracks.pop(lost_track_id, None)
@@ -389,11 +469,14 @@ def assign_target_id(track_id, person_box, current_histogram, frame_idx):
     else:
         # Kein eindeutiger alter Track gefunden:
         # Die ByteTrack-ID wird als eigene Target-ID bestätigt.
-        track_to_target[track_id] = track_id
+        new_target_id = get_new_target_id(track_id)
+
+        track_to_target[track_id] = new_target_id
+        used_target_ids.add(new_target_id)
 
         print(
             f"Neue Person bestätigt: "
-            f"BT {track_id} -> Target {track_id}"
+            f"BT {track_id} -> Target {new_target_id}"
         )
 
     # Die Wartephase ist abgeschlossen
@@ -403,24 +486,24 @@ def assign_target_id(track_id, person_box, current_histogram, frame_idx):
     
 
 
-#--------------
-# Kalman-Filter
-#--------------
+# -------------------------------------------------
+# Kalman-Filter zur Stabilisierung der Gesichtsboxen
+# -------------------------------------------------
 
-# Variablen für Kalman-Filter, wenn Gesicht nicht erkannt wird
-
+# Kalman-Zustand pro Track-ID
 face_kalman_filters = {}
 face_missing_frames = {}
 last_face_sizes = {}
-
-max_missing_frames = 4
-
 face_detection_counts = {}
+
+# Kalman-Parameter
+MAX_MISSING_FACE_FRAMES = 4
 MIN_FACE_DETECTIONS_FOR_KALMAN = 4
 
 
-# Kalman-Filter für die Gesichtsposition erstellen
 def create_face_kalman_filter(face_box):
+    """Initialisiert einen Kalman-Filter für den Mittelpunkt einer Gesichtsbox."""
+    
     x1, y1, x2, y2 = face_box
 
     width = x2 - x1
@@ -460,6 +543,8 @@ def create_face_kalman_filter(face_box):
 
 
 def update_face_kalman_filter(kalman_filter, face_box):
+    """Aktualisiert den Kalman-Filter anhand einer erkannten Gesichtsbox."""
+    
     x1, y1, x2, y2 = face_box
 
     width = x2 - x1
@@ -479,6 +564,8 @@ def update_face_kalman_filter(kalman_filter, face_box):
     
 
 def predict_face_box(kalman_filter, face_size, frame):
+    """Sagt die nächste Gesichtsbox anhand des Kalman-Filters voraus."""
+    
     prediction = kalman_filter.predict()
 
     center_x = float(prediction[0, 0])
@@ -504,9 +591,15 @@ def predict_face_box(kalman_filter, face_size, frame):
         return None
 
     return (x1, y1, x2, y2)
+
+
+# -------------------------------------------------
+# Auswahl des passenden Gesichts
+# -------------------------------------------------
     
 
 def calculate_face_distance(face, x1, y1, last_center_x, last_center_y):
+    """Berechnet die Distanz eines Gesichts zur zuletzt bekannten Position."""
 
     local_x1, local_y1, local_x2, local_y2 = face.bbox.astype(int)
 
@@ -519,6 +612,8 @@ def calculate_face_distance(face, x1, y1, last_center_x, last_center_y):
     )
     
 def calculate_initial_face_score(face, roi_x1, roi_y1, person_box):
+    """Bewertet ein Gesicht anhand von Konfidenz und Position innerhalb der Personenbox."""
+    
     person_x1, person_y1, person_x2, person_y2 = person_box
 
     local_x1, local_y1, local_x2, local_y2 = face.bbox.astype(int)
@@ -541,14 +636,20 @@ def calculate_initial_face_score(face, roi_x1, roi_y1, person_box):
 
     return face.det_score - normalized_distance
 
+# -------------------------------------------------
+# Gesichtserkennung innerhalb der Personenbox
+# -------------------------------------------------
 
 last_face_boxes = {}
 
 def detect_face(frame, person_box, face_detector, track_id):
+    """Erkennt das passende Gesicht innerhalb einer Personenbox."""
+    
     x1, y1, x2, y2 = person_box
 
     frame_height, frame_width = frame.shape[:2]
 
+    # Personen-ROI am Bildrand leicht vergrößern
     if touches_frame_border(person_box, frame):
         person_width = x2 - x1
         person_height = y2 - y1
@@ -557,7 +658,8 @@ def detect_face(frame, person_box, face_detector, track_id):
         x2 += int(person_width * 0.20)
         y1 -= int(person_height * 0.20)
         y2 += int(person_height * 0.05)
-
+        
+    # ROI auf die Bildgrenzen beschränken
     x1 = max(0, x1)
     y1 = max(0, y1)
     x2 = min(frame_width, x2)
@@ -572,13 +674,17 @@ def detect_face(frame, person_box, face_detector, track_id):
 
     if not faces:
         return None
-
+    
+    # Bei nur einem erkannten Gesicht ist keine weitere Auswahl nötig
     if len(faces) == 1:
         best_face = faces[0]
-
+    
+    # Ohne vorherige Gesichtsposition anhand von Konfidenz und erwarteter Kopfposition auswählen
     elif track_id not in last_face_boxes:
         best_face = max(faces, key=lambda face: calculate_initial_face_score(face, x1, y1, person_box))
 
+
+    # Bei vorhandener Historie das Gesicht wählen, das der zuletzt bekannten Gesichtsposition am nächsten liegt
     else:
         last_x1, last_y1, last_x2, last_y2 = last_face_boxes[track_id]
 
@@ -595,7 +701,8 @@ def detect_face(frame, person_box, face_detector, track_id):
 
         if best_distance > max_distance:
             return None
-
+        
+    # SCRFD-Koordinaten aus der ROI auf den gesamten Frame übertragen
     face_x1, face_y1, face_x2, face_y2 = best_face.bbox.astype(int)
 
     face_x1 += x1
@@ -603,6 +710,7 @@ def detect_face(frame, person_box, face_detector, track_id):
     face_x2 += x1
     face_y2 += y1
 
+    # Gesichtsbox auf die Bildgrenzen beschränken
     face_x1 = max(0, face_x1)
     face_y1 = max(0, face_y1)
     face_x2 = min(frame_width, face_x2)
@@ -614,7 +722,13 @@ def detect_face(frame, person_box, face_detector, track_id):
     return face_box
 
 
+
+# -------------------------------------------------
+# Gesichtsanonymisierung
+# -------------------------------------------------
+
 def anonymize_face(frame, face_box):
+    """Anonymisiert eine Gesichtsregion durch größenabhängigen Gaussian Blur."""
 
     x1, y1, x2, y2 = face_box
 
@@ -674,11 +788,12 @@ def anonymize_face(frame, face_box):
     frame[y1:y2, x1:x2] = blurred_face
     
 
-track_last_seen = {}
-MAX_TRACK_MEMORY_FRAMES = 30
-
+# -------------------------------------------------
+# Frame-Verarbeitung
+# -------------------------------------------------
 
 def process_frame(frame, model, face_detector, frame_idx):
+    """Verarbeitet einen Frame einschließlich Tracking, Re-Linking und Anonymisierung."""
     
     global active_track_ids_last_frame
     
@@ -686,12 +801,15 @@ def process_frame(frame, model, face_detector, frame_idx):
     
     active_track_ids_current_frame = set()  
     
+    # Persondetektion und Tracking
     results = model.track(frame, persist=True, tracker="bytetrack_custom.yaml", verbose=False)
     
     boxes = results[0].boxes
     
     
     for box in boxes:
+        
+        #Track-Informationen auslesen
         x1, y1, x2, y2 = box.xyxy[0].cpu().numpy().astype(int) # Koordinaten der Box
         cls = int(box.cls[0]) # Klasse als Integer
         conf = float(box.conf[0])# Konfidenz als Float
@@ -704,8 +822,14 @@ def process_frame(frame, model, face_detector, frame_idx):
         
         track_id = int(box.id[0])
         
+        # Erstes Auftreten der ByteTrack-ID speichern
+        if track_id not in track_first_seen:
+            track_first_seen[track_id] = frame_idx
+
+        
         active_track_ids_current_frame.add(track_id)  # Track-ID als aktiv markieren
         
+        # Falls ByteTrack dieselbe ID wieder aufnimmt, wird sie nicht länger als verloren geführt
         if track_id in lost_tracks:
             lost_tracks.pop(track_id, None)
             print(f"Track-ID {track_id} wurde wiedergefunden und aus den verlorenen Tracks entfernt.")
@@ -717,55 +841,79 @@ def process_frame(frame, model, face_detector, frame_idx):
         
         last_person_boxes[track_id] = person_box  # Speichern der zuletzt bekannten Personenbox 
         
+        # -------------------------------------------------
+        # Histogramm berechnen bzw. aktualisieren
+        # -------------------------------------------------
         current_histogram = None
         
+        # Für bereits zugeordnete Tracks das Histogrammmodell aktualisieren
         if track_id in track_to_target:
             current_histogram = calculate_histogram(frame, person_box)
             update_histogram_models(track_id, current_histogram)
             
         else:
+            # Bei neuen Tracks wird das Histogramm erst am Ende der Pending-Phase für den Re-Linking-Versuch benötigt
             next_pending_frame = (pending_track_frames.get(track_id,0 ) +1)
             if next_pending_frame >= MIN_FRAMES_BEFORE_RELINKING:
                 current_histogram = calculate_histogram(frame, person_box)
-        
+
+        # -------------------------------------------------
+        # Target-ID bestimmen
+        # -------------------------------------------------
         target_id = assign_target_id(track_id, person_box, current_histogram, frame_idx)
         
+        # Falls für einen neuen Track erstmals ein Histogramm berechnet wurde, wird es als Ausgangsmodell gespeichert        
         if (track_id in track_to_target and current_histogram is not None and track_id not in person_histogram_models):
             person_histogram_models[track_id] = current_histogram.copy()
+        
         
         # Track und Personenbox für Mausklick speichern
         current_tracks.append((track_id, target_id, x1, y1, x2, y2))  # Track-ID zur Liste der aktuellen Tracks hinzufügen
         
+        # --------------------------------------
         # Gesichtsdetektion und Anonymisierung
+        # --------------------------------------
         face_box = detect_face(frame, person_box, face_detector, track_id)
 
         if face_box is not None:
+                
+            # Anzahl erfolgreicher Gesichtsdetektionen für diesen Track erhöhen
             face_detection_counts[track_id] = (face_detection_counts.get(track_id, 0) + 1)
+            
+            # Aktuelle Größe der Gesichtsbox bestimmen
             x1_face, y1_face, x2_face, y2_face = face_box
             face_size = (x2_face - x1_face, y2_face - y1_face)
 
+            # Beim ersten erkannten Gesicht Kalman-Filter initialisieren, anschließend mit jeder neuen Detektion aktualisieren
             if track_id not in face_kalman_filters:
                 face_kalman_filters[track_id] = create_face_kalman_filter(face_box)
             else:
                 face_size = update_face_kalman_filter(face_kalman_filters[track_id],face_box)
-
+                
+                
+            # Aktuelle Gesichtsgröße speichern und Zähler fehlender Detektionen nach erfolgreicher Erkennung zurücksetzen
             last_face_sizes[track_id] = face_size
             face_missing_frames[track_id] = 0
 
             anonymize_face(frame, face_box)
 
         else:
+
+            # Anzahl aufeinanderfolgender Frames ohne Gesichtsdetektion sowie bisherige erfolgreiche Detektionen abrufen
             missing_frames = face_missing_frames.get(track_id, 0)
             detection_count = face_detection_counts.get(track_id, 0)
 
+
+            # Kalman-Vorhersage nur verwenden, wenn zuvor ausreichend Gesichtsdetektionen vorlagen und die maximale Anzahl fehlender Frames noch nicht erreicht wurde
             if (
                 track_id in face_kalman_filters
                 and track_id in last_face_sizes
                 and detection_count >= MIN_FACE_DETECTIONS_FOR_KALMAN
-                and missing_frames < max_missing_frames
+                and missing_frames < MAX_MISSING_FACE_FRAMES
             ):
                 predicted_face_box = predict_face_box(face_kalman_filters[track_id], last_face_sizes[track_id], frame)
 
+                # Vorhergesagte Gesichtsposition ebenfalls anonymisieren
                 if predicted_face_box is not None:
                     anonymize_face(frame, predicted_face_box)
 
@@ -779,11 +927,15 @@ def process_frame(frame, model, face_detector, frame_idx):
                     )
 
                 face_missing_frames[track_id] = missing_frames + 1
-            
-            
-        # Selektive Darstellung der Personenboxen
+         
+        # -------------------------------------------------
+        # Selektive Darstellung
+        # -------------------------------------------------
         
-        if (not show_all_tracks) and (target_id not in selected_track_ids):
+        if track_id not in track_to_target:
+            continue      
+        
+        if (not show_all_tracks) and (target_id not in selected_target_ids):
             continue # Wenn nur ausgewählte Tracks angezeigt werden sollen und die aktuelle Track-ID nicht ausgewählt ist, überspringen
         
             
@@ -801,15 +953,29 @@ def process_frame(frame, model, face_detector, frame_idx):
         
         
         
-    # Überprüfung auf verschwundene Tracks und Speicherung der letzten bekannten Positionen
+    # -------------------------------------------------
+    # Verschwundene Tracks speichern
+    # -------------------------------------------------
     disappeared_track_ids = (active_track_ids_last_frame- active_track_ids_current_frame)
 
     for disappeared_track_id in disappeared_track_ids:
         if disappeared_track_id not in last_person_boxes:
             continue
+        
+        # Falls der Track vor Abschluss der Pending-Phase verschwindet,
+        # erhält er ohne Re-Linking eine eigene finale Target-ID.
+        if disappeared_track_id not in track_to_target:
+            new_target_id = get_new_target_id(disappeared_track_id)
+
+            track_to_target[disappeared_track_id] = new_target_id
+            used_target_ids.add(new_target_id)
+
+            print(
+                f"Kurzer Track abgeschlossen: "
+                f"BT {disappeared_track_id} -> Target {new_target_id}")
 
         lost_tracks[disappeared_track_id] = {
-            "target_id": track_to_target.get(disappeared_track_id,disappeared_track_id),
+            "target_id": track_to_target[disappeared_track_id],
             "last_seen": frame_idx - 1,
             "person_box": last_person_boxes[disappeared_track_id],
             "histogram": person_histogram_models.get(disappeared_track_id),
@@ -888,7 +1054,7 @@ while True:
     total_processing_time += processing_time
     processed_frames += 1
 
-    if save_video:
+    if SAVE_VIDEO:
         video_writer.write(processed_frame)
 
     cv2.imshow(
@@ -913,13 +1079,13 @@ while True:
 
     # Auswahl löschen
     if key == ord("c"):
-        selected_track_ids.clear()
+        selected_target_ids.clear()
         print("Alle ausgewählten Track-IDs wurden gelöscht.")
 
 
 cap.release()
 
-if save_video:
+if SAVE_VIDEO:
     video_writer.release()
     
 cv2.destroyAllWindows()
