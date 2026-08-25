@@ -21,8 +21,8 @@ SEQUENCES = [
     "MOT17-09-FRCNN",
 ]
 
-MIN_HISTOGRAM_SIMILARITY = 0.55
-MIN_FRAMES_BEFORE_RELINKING = 3
+MIN_HISTOGRAM_SIMILARITY = 0.60
+MIN_FRAMES_BEFORE_RELINKING = 5
 
 model = None
 
@@ -359,6 +359,7 @@ relinked_track_ids = set()            # erfolgreich re-gelinkte neue Track-IDs
 MIN_LOST_FRAMES_FOR_RELINKING = 2     # Mindestanzahl an Frames, die ein Track verschwunden sein muss, bevor er für Relinking in Frage kommt
 MAX_LOST_FRAMES_FOR_RELINKING = 200   # Nach dieser Anzahl an Frames wird ein verlorener Track nicht mehr berücksichtigt.
 MAX_TRACK_MEMORY_FRAMES = 30          # Speicherdauer nicht mehr benötigter Track-Daten
+MIN_SHORT_TRACK_FRAMES = 5
 
 #Histogram Modell
 person_histogram_models = {}   # geglättetes Histogramm
@@ -829,6 +830,25 @@ def process_frame(frame, model, frame_idx):
     for disappeared_track_id in disappeared_track_ids:
         if disappeared_track_id not in last_person_boxes:
             continue
+        
+        # Nur noch nicht endgültig zugeordnete Pending-Tracks prüfen
+        if disappeared_track_id not in track_to_target:
+            
+            # Länge des verschwundenen Tracks bestimmen
+            track_length = (track_last_seen[disappeared_track_id] - track_first_seen[disappeared_track_id] + 1)
+
+            # Sehr kurze Tracks verwerfen
+            if track_length < MIN_SHORT_TRACK_FRAMES:
+                pending_mot_results.pop(disappeared_track_id, None)
+                pending_track_frames.pop(disappeared_track_id, None)
+
+                print(
+                    f"Kurzer Track verworfen: "
+                    f"BT {disappeared_track_id} "
+                    f"({track_length} Frames)"
+                )
+
+                continue
 
         lost_tracks[disappeared_track_id] = {
             "target_id": track_to_target.get(disappeared_track_id,disappeared_track_id),
