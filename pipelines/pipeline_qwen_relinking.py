@@ -17,7 +17,7 @@ import json
 # Konfiguration
 # -------------------------------------------------
 video_path = "Testvideos/durcheinander.mp4"
-SAVE_VIDEO = False
+SAVE_VIDEO = True
 
 MIN_HISTOGRAM_SIMILARITY = 0.60
 MIN_FRAMES_BEFORE_RELINKING = 5
