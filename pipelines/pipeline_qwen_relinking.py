@@ -16,7 +16,7 @@ import json
 # -------------------------------------------------
 # Konfiguration
 # -------------------------------------------------
-video_path = "Testvideos/TownCentre.mp4"
+video_path = "Testvideos/durcheinander.mp4"
 SAVE_VIDEO = False
 
 MIN_HISTOGRAM_SIMILARITY = 0.60
@@ -90,7 +90,7 @@ if SAVE_VIDEO:
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
 
     video_writer = cv2.VideoWriter(
-        f"Ausgabevideos/{video_name}_erweiterung.mp4",
+        f"Ausgabevideos/{video_name}_qwen_anonymized.mp4",
         fourcc,
         fps,
         (frame_width, frame_height)

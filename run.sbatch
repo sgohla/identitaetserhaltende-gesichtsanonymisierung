@@ -28,6 +28,6 @@ cd "$PROJECT_DIR"
 export HF_HUB_OFFLINE=1
 
 # ---Start Python Script  ---
-python mot_eval_vlm.py
+python pipeline_qwen_relinking.py
 # --- Deactivate venv ---
 deactivate
