@@ -15,7 +15,7 @@ import json
 # -------------------------------------------------
 # Konfiguration
 # -------------------------------------------------
-video_path = "Testvideos/MOT17-02.mp4"
+video_path = "Testvideos/TownCentre.mp4"
 
 MIN_HISTOGRAM_SIMILARITY = 0.60
 MIN_FRAMES_BEFORE_RELINKING = 5
