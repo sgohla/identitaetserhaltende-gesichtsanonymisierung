@@ -7,3 +7,5 @@ transformers
 accelerate
 qwen-vl-utils
 opencv-python
+insightface
+onnxruntime
