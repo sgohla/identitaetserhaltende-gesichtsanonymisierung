@@ -8,8 +8,27 @@ import cv2
 # -------------------------------------------------
 
 # Bereits anonymisiertes Video und zugehörige Trackingdaten
-video_path = "Ausgabevideos/durcheinander_histogram_anonymized.mp4"
-tracking_path = "tracking_results/durcheinander_histogram_tracks.json"
+
+#MOT17-02
+# video_path = "Ausgabevideos/MOT17-02_anonymized.mp4"
+# tracking_path = "tracking_results/MOT17-02_qwen_tracks.json"
+
+
+#MOT17-04
+# video_path = "Ausgabevideos/MOT17-04_histogram_anonymized.mp4"
+# tracking_path = "tracking_results/MOT17-04_qwen_tracks.json"
+
+
+# MOT17-09
+# video_path = "Ausgabevideos/MOT17-09_anonymized.mp4"
+# tracking_path = "tracking_results/MOT17-09_qwen_tracks.json"
+
+#TownCentre
+# video_path = "Ausgabevideos/TownCentre_anonymized.mp4"
+# tracking_path = "tracking_results/TownCentre_qwen_tracks.json"
+
+video_path = "Ausgabevideos/hindernis_anonymized.mp4"
+tracking_path = "tracking_results/hindernis_histogram_tracks.json"
 
 # Optionales Speichern der selektiven Darstellung
 SAVE_VIDEO = False

@@ -29,7 +29,7 @@ face_detector.prepare(
 
 
 # Eingabevideo
-video_path = "Testvideos/durcheinander.mp4"
+video_path = "Testvideos/MOT17-09.mp4"
 
 cap = cv2.VideoCapture(video_path)
 
@@ -44,7 +44,7 @@ fps = cap.get(cv2.CAP_PROP_FPS)
 print(f"fps: {fps}")
 
 # VideoWriter-Objekt erstellen, um das Ergebnisvideo zu speichern
-save_video = True
+save_video = False 
 fourcc = cv2.VideoWriter_fourcc(*"mp4v")
 video_writer = None
 OUTPUT_FPS = 50.0
@@ -54,28 +54,11 @@ if save_video:
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
 
     video_writer = cv2.VideoWriter(
-        f"Ausgabevideos/{video_name}_basispipeline.mp4",
+        f"Ausgabevideos/{video_name}_bytetrackvergleich.mp4",
         fourcc,
         OUTPUT_FPS,
         (frame_width, frame_height)
     )
-
-
-ID_COLORS = [
-    (255, 204, 204),  # Pastellrosa
-    (204, 255, 204),  # Pastellgrün
-    (204, 204, 255),  # Pastellblau
-    (255, 255, 204),  # Pastellgelb
-    (255, 204, 255),  # Pastelllila
-    (204, 255, 255),  # Pastelltürkis
-    (230, 216, 173),  # Sand
-    (221, 204, 255),  # Lavendel
-    (204, 230, 255),  # Himmelblau
-    (204, 255, 230),  # Mint
-]
-
-def get_color_for_id(track_id):
-    return ID_COLORS[track_id % len(ID_COLORS)]
 
 
 
@@ -185,12 +168,34 @@ def anonymize_face(frame, face_box):
     # Anonymisierte Gesichtsregion in den Frame zurückschreiben
     frame[y1:y2, x1:x2] = blurred_face
     
+    
+def calculate_iou(box1, box2):
+    x1 = max(box1[0], box2[0])
+    y1 = max(box1[1], box2[1])
+    x2 = min(box1[2], box2[2])
+    y2 = min(box1[3], box2[3])
+
+    intersection = max(0, x2 - x1) * max(0, y2 - y1)
+
+    area1 = (box1[2] - box1[0]) * (box1[3] - box1[1])
+    area2 = (box2[2] - box2[0]) * (box2[3] - box2[1])
+
+    union = area1 + area2 - intersection
+
+    if union == 0:
+        return 0
+
+    return intersection / union
+    
 
 def process_frame(frame, model, face_detector):
     
     results = model.track(frame, persist=True, tracker="bytetrack.yaml", verbose=False)
     
     boxes = results[0].boxes
+    
+    person_count = 0
+    detected_face_boxes = []
     
     for box in boxes:
         x1, y1, x2, y2 = box.xyxy[0].cpu().numpy().astype(int) # Koordinaten der Box
@@ -205,25 +210,43 @@ def process_frame(frame, model, face_detector):
         
         track_id = int(box.id[0])
         
+        person_count += 1
+        
         person_box = (x1, y1, x2, y2)
+        
         
         face_box = detect_face(frame, person_box, face_detector)
         
         if face_box is not None:
-            anonymize_face(frame, face_box)
+            #anonymize_face(frame, face_box)
+            detected_face_boxes.append(face_box)
             
-        color = get_color_for_id(track_id)
-            
-        cv2.rectangle(frame, (x1, y1), (x2, y2), color, 5) # Farbige Box um Personen zeichnen , die 5 steht für die Dicke der Box
-            
-        cv2.putText(frame, f"ID {track_id} | {conf:.2f}", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 1.2, color, 3)
-    
-    return frame
+    # Doppelte Gesichtserkennungen entfernen
+    unique_face_boxes = []
+
+    for face_box in detected_face_boxes:
+        duplicate = False
+
+        for existing_box in unique_face_boxes:
+            if calculate_iou(face_box, existing_box) > 0.7:
+                duplicate = True
+                break
+
+        if not duplicate:
+            unique_face_boxes.append(face_box)
+
+    face_count = len(unique_face_boxes)
+
+    return frame, person_count, face_count
 
 
 
 processed_frames = 0
 total_processing_time = 0.0
+
+total_person_observations = 0
+roi_face_detections = 0
+frames_with_roi_face = 0
 
 
 while True:
@@ -235,20 +258,22 @@ while True:
 
     start_time = time.perf_counter()
 
-    processed_frame = process_frame(frame, model, face_detector)
+    processed_frame, person_count, face_count = process_frame(frame, model, face_detector)
 
     processing_time = time.perf_counter() - start_time
 
     total_processing_time += processing_time
+    
     processed_frames += 1
+    total_person_observations += person_count
+    roi_face_detections += face_count
+    
+    if face_count > 0:
+        frames_with_roi_face += 1
 
     if save_video:
         video_writer.write(processed_frame)
 
-    cv2.imshow("Processed Frame", processed_frame)
-
-    if cv2.waitKey(1) == 27:
-        break
 
 cap.release()
 
@@ -267,4 +292,7 @@ if processed_frames > 0:
     print(f"\nVerarbeitete Frames: {processed_frames}")
     print(f"Durchschnittliche Zeit pro Frame: {average_processing_time:.4f} s")
     print(f"Verarbeitungsgeschwindigkeit: {processing_fps:.2f} FPS")
-       
+
+print(f"Personenbeobachtungen: {total_person_observations}")
+print(f"ROI-Gesichtsdetektionen: {roi_face_detections}")
+print(f"Frames mit mindestens einem erkannten Gesicht: {frames_with_roi_face}")

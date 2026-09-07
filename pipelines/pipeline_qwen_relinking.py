@@ -61,7 +61,7 @@ face_detector = FaceAnalysis(
 face_detector.prepare(
     ctx_id=-1,
     det_size=(320, 320),
-    det_thresh=0.4
+    det_thresh=0.3
 )
 
 
@@ -184,7 +184,7 @@ def update_reference_frames(track_id, frame, person_box, confidence, frame_idx):
 
     other_index = 1 - worst_index
 
-    # Ersatz nur, wenn der neue Frame besser ist undngenügend Abstand zur anderen Referenz besitzt
+    # Ersatz nur, wenn der neue Frame besser ist und genügend Abstand zur anderen Referenz besitzt
     if (score > stored[worst_index]["score"] and abs(frame_idx - stored[other_index]["frame_idx"]) >= 8):
         stored[worst_index] = candidate
 
@@ -721,10 +721,11 @@ face_kalman_filters = {}
 face_missing_frames = {}
 last_face_sizes = {}
 face_detection_counts = {}
+kalman_active = {}
 
 # Kalman-Parameter
 MAX_MISSING_FACE_FRAMES = 4
-MIN_FACE_DETECTIONS_FOR_KALMAN = 4
+MIN_FACE_DETECTIONS_FOR_KALMAN = 5
 
 
 def create_face_kalman_filter(face_box):
@@ -1143,22 +1144,23 @@ def process_frame(frame, model, face_detector, frame_idx):
             anonymize_face(frame, face_box)
 
         else:
-
-            # Anzahl aufeinanderfolgender Frames ohne Gesichtsdetektion sowie bisherige erfolgreiche Detektionen abrufen
             missing_frames = face_missing_frames.get(track_id, 0)
             detection_count = face_detection_counts.get(track_id, 0)
 
+            # Beim ersten Ausfall prüfen, ob zuvor mindestens 5
+            # aufeinanderfolgende Gesichtserkennungen vorlagen
+            if missing_frames == 0:
+                kalman_active[track_id] = (detection_count >= MIN_FACE_DETECTIONS_FOR_KALMAN)
 
-            # Kalman-Vorhersage nur verwenden, wenn zuvor ausreichend Gesichtsdetektionen vorlagen und die maximale Anzahl fehlender Frames noch nicht erreicht wurde
-            if (
-                track_id in face_kalman_filters
+            face_detection_counts[track_id] = 0
+
+            if (track_id in face_kalman_filters
                 and track_id in last_face_sizes
-                and detection_count >= MIN_FACE_DETECTIONS_FOR_KALMAN
-                and missing_frames < MAX_MISSING_FACE_FRAMES
-            ):
+                and kalman_active.get(track_id, False)
+                and missing_frames < MAX_MISSING_FACE_FRAMES):
+                
                 predicted_face_box = predict_face_box(face_kalman_filters[track_id], last_face_sizes[track_id], frame)
 
-                # Vorhergesagte Gesichtsposition ebenfalls anonymisieren
                 if predicted_face_box is not None:
                     anonymize_face(frame, predicted_face_box)
 
@@ -1258,6 +1260,7 @@ def process_frame(frame, model, face_detector, frame_idx):
         pending_track_frames.pop(track_id, None)
         track_first_seen.pop(track_id, None)
         reference_frames.pop(track_id, None)
+        kalman_active.pop(track_id, None)
 
     return frame
     

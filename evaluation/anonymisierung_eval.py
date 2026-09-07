@@ -22,17 +22,36 @@ face_detector = FaceAnalysis(
 face_detector.prepare(
     ctx_id=-1,
     det_size=(320, 320),
-    det_thresh=0.3
+    det_thresh=0.4
 )
 
 
 # Eingabevideo
-video_path = "Testvideos/verdeckung.MOV"
+video_path = "Testvideos/MOT17-09.mp4"
 
 cap = cv2.VideoCapture(video_path)
 
 # Dateiname ohne Ordner und Endung
 video_name = os.path.splitext(os.path.basename(video_path))[0]
+
+MULTI_FACE_OUTPUT_DIR = f"Evaluation/multi_face/{video_name}"
+os.makedirs(MULTI_FACE_OUTPUT_DIR, exist_ok=True)
+
+MULTI_FACE_SAVE_INTERVAL = 4
+last_multi_face_saved = {}
+
+DET_THRESH = 0.4
+
+LOW_CONF_OUTPUT_DIR = f"Evaluation/low_conf/{video_name}_thresh_{DET_THRESH}_überarbeitet"
+KALMAN_OUTPUT_DIR = f"Evaluation/kalman/{video_name}_thresh_{DET_THRESH}_überarbeitet"
+
+os.makedirs(LOW_CONF_OUTPUT_DIR, exist_ok=True)
+os.makedirs(KALMAN_OUTPUT_DIR, exist_ok=True)
+
+LOW_CONF_UPPER_LIMIT = 0.4
+
+low_conf_detections = 0
+kalman_used_frames = 0
 
 # Videoeigenschaften abrufen
 frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -58,59 +77,6 @@ if save_video:
         (frame_width, frame_height)
     )
 
-# Selektives Tracking
-show_all_tracks = False # Wenn True, werden alle Tracks angezeigt, False: nur ausgewählten
-
-selected_track_ids = set() # Set zum Speichern der ausgewählten Track-IDs
-
-current_tracks = [] # Welche IDs sind gerade wo sichtbar? Koordinaten werden dann bei Mausklick verglichen. Aufbau: (track_id, x1, y1, x2, y2)
-
-
-# Mausklick-Funktion
-def mouse_click(event, x, y, flags, param):
-
-    if event != cv2.EVENT_LBUTTONDOWN:
-        return
-
-    # Prüfen, ob der Klick innerhalb einer aktuellen Personenbox liegt
-    for track_id, x1, y1, x2, y2 in current_tracks:
-
-        if x1 <= x <= x2 and y1 <= y <= y2:
-
-            if track_id in selected_track_ids:
-                selected_track_ids.remove(track_id)
-                print(f"Track-ID {track_id} wurde abgewählt.")
-
-            else:
-                selected_track_ids.add(track_id)
-                print(f"Track-ID {track_id} wurde ausgewählt.")
-
-            break
-
-window_name = "Processed Frame"
-
-cv2.namedWindow(window_name)
-cv2.setMouseCallback(window_name, mouse_click)
-
-
-
-# Farben für Track-IDs definieren
-
-ID_COLORS = [
-    (255, 204, 204),  # Pastellrosa
-    (204, 255, 204),  # Pastellgrün
-    (204, 204, 255),  # Pastellblau
-    (255, 255, 204),  # Pastellgelb
-    (255, 204, 255),  # Pastelllila
-    (204, 255, 255),  # Pastelltürkis
-    (230, 216, 173),  # Sand
-    (221, 204, 255),  # Lavendel
-    (204, 230, 255),  # Himmelblau
-    (204, 255, 230),  # Mint
-]
-
-def get_color_for_id(track_id):
-    return ID_COLORS[track_id % len(ID_COLORS)]
 
 # Randbereich für die Personenbox, um zu erkennen, ob sie am Rand des Frames liegt
 
@@ -265,9 +231,74 @@ def calculate_initial_face_score(face, roi_x1, roi_y1, person_box):
     return face.det_score - normalized_distance
 
 
+def save_multi_face_case(frame, person_box, faces, best_face, roi_x1, roi_y1, frame_idx, track_id, selection_method, baseline_face):
+    last_saved = last_multi_face_saved.get(track_id)
+
+    if last_saved is not None and frame_idx - last_saved < MULTI_FACE_SAVE_INTERVAL:
+        return
+
+    debug_frame = frame.copy()
+
+    # Personenbox markieren
+    px1, py1, px2, py2 = person_box
+    cv2.rectangle(debug_frame, (px1, py1), (px2, py2), (255, 255, 255), 2)
+
+    for i, face in enumerate(faces):
+        fx1, fy1, fx2, fy2 = face.bbox.astype(int)
+
+        fx1 += roi_x1
+        fx2 += roi_x1
+        fy1 += roi_y1
+        fy2 += roi_y1
+
+        if face is best_face:
+            color = (0, 255, 0)
+            label = f"OURS {i} conf={face.det_score:.2f}"
+        elif face is baseline_face:
+            color = (255, 0, 0)
+            label = f"CONF {i} conf={face.det_score:.2f}"
+        else:
+            color = (0, 0, 255)
+            label = f"{i} conf={face.det_score:.2f}"
+
+        cv2.rectangle(debug_frame, (fx1, fy1), (fx2, fy2), color, 2)
+        cv2.putText(debug_frame, label, (fx1, max(fy1 - 5, 15)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+
+    filename = f"{video_name}_frame_{frame_idx:05d}_track_{track_id}.jpg"
+    cv2.imwrite(os.path.join(MULTI_FACE_OUTPUT_DIR, filename), debug_frame)
+
+    last_multi_face_saved[track_id] = frame_idx
+
+
 last_face_boxes = {}
 
-def detect_face(frame, person_box, face_detector, track_id):
+# Evaluation Stabilisierung
+face_selection_cases = 0
+multi_face_cases = 0
+multi_face_initial_selection = 0
+multi_face_history_selection = 0
+multi_face_rejected = 0
+multi_face_same_as_conf = 0
+multi_face_different_from_conf = 0
+
+face_detection_failures = 0
+kalman_predictions = 0
+kalman_not_possible = 0
+kalman_eligible_failures = 0
+kalman_prediction_failures = 0
+face_detected_frames = 0
+kalman_used_frames = 0
+kalman_correct_frames = 0
+
+def detect_face(frame, person_box, face_detector, track_id, frame_idx):
+    global face_selection_cases
+    global multi_face_cases
+    global multi_face_initial_selection
+    global multi_face_history_selection
+    global multi_face_rejected
+    global multi_face_same_as_conf
+    global multi_face_different_from_conf
+    
     x1, y1, x2, y2 = person_box
 
     frame_height, frame_width = frame.shape[:2]
@@ -289,20 +320,36 @@ def detect_face(frame, person_box, face_detector, track_id):
     person_roi = frame[y1:y2, x1:x2]
 
     if person_roi.size == 0:
-        return None
+        return None, None
 
     faces = face_detector.get(person_roi)
 
     if not faces:
-        return None
+        return None, None
+    
+    face_selection_cases += 1
+    baseline_face = max(faces, key=lambda face: face.det_score) if len(faces) > 1 else None
 
     if len(faces) == 1:
         best_face = faces[0]
+        selection_method = "single"
 
     elif track_id not in last_face_boxes:
+        
+        #Evaluation
+        multi_face_cases += 1
+        multi_face_initial_selection += 1
+        selection_method = "initial"
+        
         best_face = max(faces, key=lambda face: calculate_initial_face_score(face, x1, y1, person_box))
 
     else:
+        
+        #Evaluation
+        multi_face_cases += 1
+        multi_face_history_selection += 1
+        selection_method = "history"
+        
         last_x1, last_y1, last_x2, last_y2 = last_face_boxes[track_id]
 
         last_center_x = (last_x1 + last_x2) / 2
@@ -317,9 +364,24 @@ def detect_face(frame, person_box, face_detector, track_id):
         max_distance = 2.5 * max(last_width, last_height)
 
         if best_distance > max_distance:
-            return None
+            multi_face_rejected += 1
+    
+
+            save_multi_face_case(frame, person_box, faces, best_face, x1, y1, frame_idx, track_id, "history_rejected", baseline_face)
+
+
+            return None , None
+        
+    if len(faces) > 1:
+
+        if best_face is baseline_face:
+            multi_face_same_as_conf += 1
+        else:
+            multi_face_different_from_conf += 1
+            save_multi_face_case(frame, person_box, faces, best_face, x1, y1, frame_idx, track_id, selection_method, baseline_face)
 
     face_x1, face_y1, face_x2, face_y2 = best_face.bbox.astype(int)
+    
 
     face_x1 += x1
     face_y1 += y1
@@ -334,7 +396,7 @@ def detect_face(frame, person_box, face_detector, track_id):
     face_box = (face_x1, face_y1, face_x2, face_y2)
     last_face_boxes[track_id] = face_box
 
-    return face_box
+    return face_box, float(best_face.det_score)
 
 
 def anonymize_face(frame, face_box):
@@ -403,14 +465,22 @@ MAX_TRACK_MEMORY_FRAMES = 30
 
 def process_frame(frame, model, face_detector, frame_idx):
     
-    current_tracks.clear()  # Liste der aktuellen Tracks für diesen Frame zurücksetzen
+    global face_detection_failures
+    global kalman_predictions
+    global kalman_not_possible
+    global kalman_eligible_failures
+    global kalman_prediction_failures
+    global face_detected_frames
+    global kalman_used_frames
+    global low_conf_detections
+
+    
     
     results = model.track(frame, persist=True, tracker="bytetrack.yaml", verbose=False)
     
     boxes = results[0].boxes
     
     detection_frame = frame.copy()
-    
     
     for box in boxes:
         x1, y1, x2, y2 = box.xyxy[0].cpu().numpy().astype(int) # Koordinaten der Box
@@ -430,16 +500,25 @@ def process_frame(frame, model, face_detector, frame_idx):
         
         person_box = (x1, y1, x2, y2)
         
-        # Track und Personenbox für Mausklick speichern
-        current_tracks.append((track_id, x1, y1, x2, y2))  # Track-ID zur Liste der aktuellen Tracks hinzufügen
         
         # Gesichtsdetektion und Anonymisierung
-        face_box = detect_face(detection_frame, person_box, face_detector, track_id)
+        face_box, face_conf = detect_face(detection_frame, person_box, face_detector, track_id, frame_idx)
 
         if face_box is not None:
+            face_detected_frames += 1
+            if face_conf < LOW_CONF_UPPER_LIMIT:
+                low_conf_detections += 1
+
+                debug_frame = frame.copy()
+                fx1, fy1, fx2, fy2 = face_box
+
+                cv2.rectangle(debug_frame, (fx1, fy1), (fx2, fy2), (0, 255, 0), 2)
+                cv2.putText(debug_frame, f"SCRFD conf={face_conf:.3f}", (fx1, max(fy1 - 5, 15)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+
+                cv2.imwrite(os.path.join(LOW_CONF_OUTPUT_DIR, f"{video_name}_frame_{frame_idx:05d}_track_{track_id}_conf_{face_conf:.3f}.jpg"), debug_frame)
+            
             face_detection_counts[track_id] = (face_detection_counts.get(track_id, 0) + 1)
             kalman_active[track_id] = False
-            
             x1_face, y1_face, x2_face, y2_face = face_box
             face_size = (x2_face - x1_face, y2_face - y1_face)
 
@@ -454,10 +533,10 @@ def process_frame(frame, model, face_detector, frame_idx):
             anonymize_face(frame, face_box)
 
         else:
+            face_detection_failures += 1
             missing_frames = face_missing_frames.get(track_id, 0)
             detection_count = face_detection_counts.get(track_id, 0)
-            
-            # Beim ersten Ausfall prüfen, ob zuvor mindestens 5
+            # Beim ersten Ausfall prüfen, ob zuvor mindestens 10
             # aufeinanderfolgende Gesichtserkennungen vorlagen
             if missing_frames == 0:
                 kalman_active[track_id] = (detection_count >= MIN_FACE_DETECTIONS_FOR_KALMAN)
@@ -470,43 +549,36 @@ def process_frame(frame, model, face_detector, frame_idx):
                 and kalman_active.get(track_id, False)
                 and missing_frames < MAX_MISSING_FRAMES
             ):
+                kalman_eligible_failures += 1
                 predicted_face_box = predict_face_box(face_kalman_filters[track_id], last_face_sizes[track_id], frame)
 
                 if predicted_face_box is not None:
-                    anonymize_face(frame, predicted_face_box)
+                    kalman_predictions += 1
+                    kalman_used_frames += 1
+                    
+                    debug_frame = frame.copy()
+                    kx1, ky1, kx2, ky2 = predicted_face_box
 
-                    #Nur zum Testen
-                    cv2.rectangle(
-                        frame,
-                        (predicted_face_box[0], predicted_face_box[1]),
-                        (predicted_face_box[2], predicted_face_box[3]),
-                        (0, 165, 255),
-                        2
-                    )
+                    cv2.rectangle(debug_frame, (kx1, ky1), (kx2, ky2), (0, 255, 0), 2)
+                    cv2.putText(debug_frame, "Kalman", (kx1, max(ky1 - 5, 15)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+
+                    cv2.imwrite(os.path.join(KALMAN_OUTPUT_DIR, f"{video_name}_frame_{frame_idx:05d}_track_{track_id}.jpg"), debug_frame)
+                    
+                    anonymize_face(frame, predicted_face_box)
+                else:
+                    kalman_not_possible += 1
+                    kalman_prediction_failures += 1
 
                 face_missing_frames[track_id] = missing_frames + 1
                 
-            
-            
-        # Selektive Darstellung der Personenboxen
-        
-        if (not show_all_tracks) and (track_id not in selected_track_ids):
-            continue # Wenn nur ausgewählte Tracks angezeigt werden sollen und die aktuelle Track-ID nicht ausgewählt ist, überspringen
-        
-            
-        color = get_color_for_id(track_id)
-            
-        cv2.rectangle(frame, (x1, y1), (x2, y2), color, 5) # Farbige Box um Personen zeichnen , die 5 steht für die Dicke der Box
-            
-        cv2.putText(frame, f"ID {track_id} | {conf:.2f}", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 1.2, color, 3)
+            else:
+                kalman_not_possible += 1
         
         
      # Nicht mehr benötigte Daten alter Tracks entfernen
-    old_track_ids = [
-        track_id
+    old_track_ids = [track_id
         for track_id, last_seen in track_last_seen.items()
-        if frame_idx - last_seen > MAX_TRACK_MEMORY_FRAMES
-    ]
+        if frame_idx - last_seen > MAX_TRACK_MEMORY_FRAMES]
 
     for track_id in old_track_ids:
         track_last_seen.pop(track_id, None)
@@ -514,7 +586,6 @@ def process_frame(frame, model, face_detector, frame_idx):
         face_missing_frames.pop(track_id, None)
         last_face_sizes.pop(track_id, None)
         last_face_boxes.pop(track_id, None)
-        selected_track_ids.discard(track_id)
         face_detection_counts.pop(track_id, None)
         kalman_active.pop(track_id, None)
 
@@ -551,38 +622,11 @@ while True:
     if save_video:
         video_writer.write(processed_frame)
 
-    cv2.imshow(
-        window_name,
-        processed_frame
-    )
-
-    key = cv2.waitKey(1) & 0xFF
-
-    # ESC zum Beenden
-    if key == 27:
-        break
-
-    # Zwischen allen und ausgewählten Tracks wechseln
-    if key == ord("s"):
-        show_all_tracks = not show_all_tracks
-
-        if show_all_tracks:
-            print("Alle Tracks werden angezeigt.")
-        else:
-            print("Nur ausgewählte Tracks werden angezeigt.")
-
-    # Auswahl löschen
-    if key == ord("c"):
-        selected_track_ids.clear()
-        print("Alle ausgewählten Track-IDs wurden gelöscht.")
-
 
 cap.release()
 
 if save_video:
     video_writer.release()
-    
-cv2.destroyAllWindows()
 
 if processed_frames > 0:
 
@@ -595,5 +639,30 @@ if processed_frames > 0:
     print("Durchschnittliche Zeit pro Frame: "f"{average_processing_time:.4f} s")
 
     print("Verarbeitungsgeschwindigkeit: "f"{processing_fps:.2f} FPS")
+    
+    
+print("\n--- Stabilisierungsevaluation ---")
+print(f"Video: {video_name}")
+
+print("\nMehrfachgesichtsauswahl:")
+print(f"Frames mit mindestens einem Gesichtskandidaten: {face_selection_cases}")
+print(f"Frames mit mehreren Gesichtskandidaten: {multi_face_cases}")
+
+if face_selection_cases > 0:
+    multi_face_rate = multi_face_cases / face_selection_cases * 100
+    print(f"Anteil mit erforderlicher Mehrfachauswahl: {multi_face_rate:.2f} %")
+
+print(f"Gleiche Auswahl wie höchste Confidence: {multi_face_same_as_conf}")
+print(f"Andere Auswahl als höchste Confidence: {multi_face_different_from_conf}")
+
+if multi_face_cases > 0:
+    difference_rate = multi_face_different_from_conf / multi_face_cases * 100
+    print(f"Anteil abweichender Entscheidungen: {difference_rate:.2f} %")
+
+print("\nGesichtserkennung und Kalman:")
+print(f"Direkte SCRFD-Detektionen: {face_detected_frames}")
+print(f"Niedrigkonfidente Detektionen (< {LOW_CONF_UPPER_LIMIT}): {low_conf_detections}")
+print(f"Kalman-Überbrückungen: {kalman_used_frames}")
+print(f"Anonymisierungen insgesamt: {face_detected_frames + kalman_used_frames}")
 
        

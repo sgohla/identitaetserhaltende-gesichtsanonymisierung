@@ -22,12 +22,12 @@ face_detector = FaceAnalysis(
 face_detector.prepare(
     ctx_id=-1,
     det_size=(320, 320),
-    det_thresh=0.4
+    det_thresh=0.3
 )
 
 
 # Eingabevideo
-video_path = "Testvideos/MOT17-09.mp4"
+video_path = "Testvideos/verdeckung.MOV"
 
 cap = cv2.VideoCapture(video_path)
 
@@ -85,9 +85,10 @@ face_kalman_filters = {}
 face_missing_frames = {}
 last_face_sizes = {}
 face_detection_counts = {}
+kalman_active = {}
 
 MAX_MISSING_FRAMES = 4
-MIN_FACE_DETECTIONS_FOR_KALMAN = 4
+MIN_FACE_DETECTIONS_FOR_KALMAN = 5
 
 
 # Kalman-Filter für die Gesichtsposition erstellen
@@ -356,6 +357,8 @@ def process_frame(frame, model, face_detector, frame_idx):
     
     boxes = results[0].boxes
     
+    detection_frame = frame.copy()
+    
     
     for box in boxes:
         x1, y1, x2, y2 = box.xyxy[0].cpu().numpy().astype(int) # Koordinaten der Box
@@ -377,7 +380,7 @@ def process_frame(frame, model, face_detector, frame_idx):
         
         
         # Gesichtsdetektion und Anonymisierung
-        face_box = detect_face(frame, person_box, face_detector, track_id)
+        face_box = detect_face(detection_frame, person_box, face_detector, track_id)
 
         if face_box is not None:
             face_detection_counts[track_id] = (face_detection_counts.get(track_id, 0) + 1)
@@ -398,25 +401,22 @@ def process_frame(frame, model, face_detector, frame_idx):
             missing_frames = face_missing_frames.get(track_id, 0)
             detection_count = face_detection_counts.get(track_id, 0)
 
-            if (
-                track_id in face_kalman_filters
+            # Beim ersten Ausfall prüfen, ob zuvor mindestens 5
+            # aufeinanderfolgende Gesichtserkennungen vorlagen
+            if missing_frames == 0:
+                kalman_active[track_id] = (detection_count >= MIN_FACE_DETECTIONS_FOR_KALMAN)
+
+            face_detection_counts[track_id] = 0
+
+            if (track_id in face_kalman_filters
                 and track_id in last_face_sizes
-                and detection_count >= MIN_FACE_DETECTIONS_FOR_KALMAN
-                and missing_frames < MAX_MISSING_FRAMES
-            ):
+                and kalman_active.get(track_id, False)
+                and missing_frames < MAX_MISSING_FRAMES):
+                
                 predicted_face_box = predict_face_box(face_kalman_filters[track_id], last_face_sizes[track_id], frame)
 
                 if predicted_face_box is not None:
                     anonymize_face(frame, predicted_face_box)
-
-                    # Nur zum Testen
-                    # cv2.rectangle(
-                    #     frame,
-                    #     (predicted_face_box[0], predicted_face_box[1]),
-                    #     (predicted_face_box[2], predicted_face_box[3]),
-                    #     (0, 165, 255),
-                    #     2
-                    # )
 
                 face_missing_frames[track_id] = missing_frames + 1
             
@@ -436,6 +436,7 @@ def process_frame(frame, model, face_detector, frame_idx):
         last_face_sizes.pop(track_id, None)
         last_face_boxes.pop(track_id, None)
         face_detection_counts.pop(track_id, None)
+        kalman_active.pop(track_id, None)
 
     return frame
     

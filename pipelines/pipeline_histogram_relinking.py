@@ -16,8 +16,8 @@ import json
 video_path = "Testvideos/durcheinander.mp4"
 SAVE_VIDEO = True
 
-MIN_HISTOGRAM_SIMILARITY = 0.70
-MIN_FRAMES_BEFORE_RELINKING = 15
+MIN_HISTOGRAM_SIMILARITY = 0.60
+MIN_FRAMES_BEFORE_RELINKING = 5
 
 
 # -------------------------------------------------
@@ -39,7 +39,7 @@ face_detector = FaceAnalysis(
 face_detector.prepare(
     ctx_id=-1,
     det_size=(320, 320),
-    det_thresh=0.4
+    det_thresh=0.3
 )
 
 
@@ -452,10 +452,11 @@ face_kalman_filters = {}
 face_missing_frames = {}
 last_face_sizes = {}
 face_detection_counts = {}
+kalman_active= {}
 
 # Kalman-Parameter
 MAX_MISSING_FACE_FRAMES = 4
-MIN_FACE_DETECTIONS_FOR_KALMAN = 4
+MIN_FACE_DETECTIONS_FOR_KALMAN = 5
 
 
 def create_face_kalman_filter(face_box):
@@ -762,6 +763,8 @@ def process_frame(frame, model, face_detector, frame_idx):
     
     boxes = results[0].boxes
     
+    original_frame = frame.copy()
+    
     
     for box in boxes:
         
@@ -804,14 +807,14 @@ def process_frame(frame, model, face_detector, frame_idx):
         
         # Für bereits zugeordnete Tracks das Histogrammmodell aktualisieren
         if track_id in track_to_target:
-            current_histogram = calculate_histogram(frame, person_box)
+            current_histogram = calculate_histogram(original_frame, person_box)
             update_histogram_models(track_id, current_histogram)
             
         else:
             # Bei neuen Tracks wird das Histogramm erst am Ende der Pending-Phase für den Re-Linking-Versuch benötigt
             next_pending_frame = (pending_track_frames.get(track_id,0 ) +1)
             if next_pending_frame >= MIN_FRAMES_BEFORE_RELINKING:
-                current_histogram = calculate_histogram(frame, person_box)
+                current_histogram = calculate_histogram(original_frame, person_box)
 
         # -------------------------------------------------
         # Target-ID bestimmen
@@ -847,7 +850,7 @@ def process_frame(frame, model, face_detector, frame_idx):
         # --------------------------------------
         # Gesichtsdetektion und Anonymisierung
         # --------------------------------------
-        face_box = detect_face(frame, person_box, face_detector, track_id)
+        face_box = detect_face(original_frame, person_box, face_detector, track_id)
 
         if face_box is not None:
                 
@@ -872,22 +875,23 @@ def process_frame(frame, model, face_detector, frame_idx):
             anonymize_face(frame, face_box)
 
         else:
-
-            # Anzahl aufeinanderfolgender Frames ohne Gesichtsdetektion sowie bisherige erfolgreiche Detektionen abrufen
             missing_frames = face_missing_frames.get(track_id, 0)
             detection_count = face_detection_counts.get(track_id, 0)
 
+            # Beim ersten Ausfall prüfen, ob zuvor mindestens 5
+            # aufeinanderfolgende Gesichtserkennungen vorlagen
+            if missing_frames == 0:
+                kalman_active[track_id] = (detection_count >= MIN_FACE_DETECTIONS_FOR_KALMAN)
 
-            # Kalman-Vorhersage nur verwenden, wenn zuvor ausreichend Gesichtsdetektionen vorlagen und die maximale Anzahl fehlender Frames noch nicht erreicht wurde
-            if (
-                track_id in face_kalman_filters
+            face_detection_counts[track_id] = 0
+
+            if (track_id in face_kalman_filters
                 and track_id in last_face_sizes
-                and detection_count >= MIN_FACE_DETECTIONS_FOR_KALMAN
-                and missing_frames < MAX_MISSING_FACE_FRAMES
-            ):
+                and kalman_active.get(track_id, False)
+                and missing_frames < MAX_MISSING_FACE_FRAMES):
+                
                 predicted_face_box = predict_face_box(face_kalman_filters[track_id], last_face_sizes[track_id], frame)
 
-                # Vorhergesagte Gesichtsposition ebenfalls anonymisieren
                 if predicted_face_box is not None:
                     anonymize_face(frame, predicted_face_box)
 
@@ -985,6 +989,7 @@ def process_frame(frame, model, face_detector, frame_idx):
         face_detection_counts.pop(track_id, None)
         person_histogram_models.pop(track_id, None)
         pending_track_frames.pop(track_id, None)
+        kalman_active.pop(track_id, None)
 
     return frame
     
