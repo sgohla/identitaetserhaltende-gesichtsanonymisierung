@@ -54,6 +54,27 @@ if not cap.isOpened():
 # Dateiname ohne Ordner und Endung
 video_name = os.path.splitext(os.path.basename(video_path))[0]
 
+# Videoeigenschaften abrufen
+frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+fps = cap.get(cv2.CAP_PROP_FPS)
+
+# VideoWriter-Objekt erstellen, um das Ergebnisvideo zu speichern
+save_video = True
+video_writer = None
+
+if save_video:
+    os.makedirs("Ausgabevideos", exist_ok=True)
+
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+
+    video_writer = cv2.VideoWriter(
+        f"Ausgabevideos/{video_name}_anonymized.mp4",
+        fourcc,
+        fps,
+        (frame_width, frame_height)
+    )
+
 
 # -------------------------------------------------
 # Randüberprüfung
@@ -999,6 +1020,9 @@ while True:
 
     total_processing_time += processing_time
     processed_frames += 1
+    
+    if save_video:
+        video_writer.write(processed_frame)
 
         
         
@@ -1033,6 +1057,11 @@ print(f"Trackingdaten gespeichert: {tracking_output_path}")
 
 
 cap.release()
+
+if save_video:
+    video_writer.release()
+
+cv2.destroyAllWindows()
 
 
 if processed_frames > 0:

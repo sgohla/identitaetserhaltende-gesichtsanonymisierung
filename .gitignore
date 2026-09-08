@@ -42,6 +42,8 @@ archive/retinaface.py
 archive/scrfd_frame.py
 archive/scrfd.py
 
+pipeline/run.sbatch
+
 # IDE
 .vscode/
 .idea/
