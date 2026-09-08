@@ -99,5 +99,3 @@ Der Ordner `archive` enthält ältere und experimentelle Implementierungen, die 
 Die verwendeten Testvideos, Datensätze und daraus erzeugten Ergebnisdateien sind nicht Bestandteil dieses Repositories.
 
 Für die Anwendung der Pipeline kann ein eigenes Eingabevideo verwendet werden. Die JSON-Datei mit den Tracking-Ergebnissen und das anonymisierte Video werden durch die jeweiligen Skripte unabhängig voneinander erzeugt und können anschließend gemeinsam im Tracking Viewer geöffnet werden.
-
-Für die Tracking-Evaluation wird der MOT17-Datensatz separat benötigt. Qwen2.5-VL-7B-Instruct sowie weitere verwendete Modellgewichte müssen ebenfalls separat bereitgestellt werden.
