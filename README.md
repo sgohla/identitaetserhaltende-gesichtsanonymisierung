@@ -2,7 +2,7 @@
 
 Dieses Repository enthält den im Rahmen der Bachelorarbeit **„Identitätserhaltende Anonymisierung von Gesichtern in Videoaufnahmen“** entwickelten Code.
 
-Die entwickelte Pipeline umfasst die Personendetektion und -verfolgung, Verfahren zum Re-Linking unterbrochener Tracks sowie die Gesichtserkennung und -anonymisierung. Zusätzlich wurden Verfahren zur Stabilisierung der Gesichtsanonymisierung umgesetzt.
+Die entwickelte Pipeline umfasst die Personendetektion und -verfolgung, Verfahren zum Re-Linking unterbrochener Tracks sowie die Gesichtsdetektion und -anonymisierung. Zusätzlich wurden Verfahren zur Stabilisierung der Gesichtsanonymisierung umgesetzt.
 
 ## Verwendete Verfahren
 
@@ -10,9 +10,9 @@ Für die grundlegende Verarbeitung werden folgende Modelle und Verfahren verwend
 
 - YOLOv8m zur Personendetektion
 - ByteTrack zur Personenverfolgung
-- SCRFD zur Gesichtserkennung
+- SCRFD zur Gesichtsdetektion
 - Gaußsche Weichzeichnung zur Gesichtsanonymisierung
-- Kalman-Filter zur Überbrückung kurzzeitiger Ausfälle der Gesichtserkennung
+- Kalman-Filter zur Überbrückung kurzzeitiger Ausfälle der Gesichtsdetektion
 
 Für das Re-Linking unterbrochener Tracks stehen zwei Varianten zur Verfügung
 
@@ -42,6 +42,7 @@ Das Histogramm-basierte Re-Linking wird über folgendes Skript ausgeführt
 ```bash
 python pipeline/pipeline_histogram_relinking.py
 ```
+Neben den Tracking-Ergebnissen wird während der Verarbeitung auch das anonymisierte Ausgabevideo erzeugt. Die JSON-Datei und das zugehörige anonymisierte Video können anschließend gemeinsam im Tracking Viewer verwendet werden.
 
 ### VLM-basiertes Re-Linking
 
@@ -53,6 +54,8 @@ python pipeline/pipeline_qwen_relinking.py
 
 Die für Qwen benötigten Modellgewichte sind nicht Bestandteil dieses Repositories und werden bei der Verwendung des Modells separat geladen.
 
+Die VLM-basierte Variante wurde für die Ausführung auf Mogon umgesetzt. Die Erzeugung des anonymisierten Videos ist hierbei von der Erzeugung der Tracking-Ergebnisse getrennt. Ein zum selben Eingabevideo gehörendes anonymisiertes Video kann mit dem nachfolgend beschriebenen Skript erzeugt werden.
+
 ## Erstellung des anonymisierten Videos
 
 Die Erstellung des anonymisierten Videos erfolgt unabhängig vom Re-Linking. Dafür wird dasselbe Eingabevideo mit folgendem Skript verarbeitet
@@ -61,7 +64,7 @@ Die Erstellung des anonymisierten Videos erfolgt unabhängig vom Re-Linking. Daf
 python pipeline/create_anonymized_videos.py
 ```
 
-Bei der Verarbeitung wird die Gesichtserkennung innerhalb der durch YOLO und ByteTrack bestimmten Personenregionen durchgeführt. Zusätzlich werden die implementierten Verfahren zur Stabilisierung der Gesichtsanonymisierung angewendet. Dazu gehören die Auswahl eines passenden Gesichts bei mehreren erkannten Gesichtskandidaten sowie die Kalman-basierte Überbrückung kurzzeitiger Ausfälle der Gesichtserkennung.
+Bei der Verarbeitung wird die Gesichtsdetektion innerhalb der durch YOLO und ByteTrack bestimmten Personenregionen durchgeführt. Zusätzlich werden die implementierten Verfahren zur Stabilisierung der Gesichtsanonymisierung angewendet. Dazu gehören die Auswahl eines passenden Gesichts bei mehreren erkannten Gesichtskandidaten sowie die Kalman-basierte Überbrückung kurzzeitiger Ausfälle der Gesichtsdetektion.
 
 Die erkannten Gesichter werden anschließend mittels einer an die Gesichtsgröße angepassten Gaußschen Weichzeichnung anonymisiert.
 
@@ -69,7 +72,7 @@ Die erkannten Gesichter werden anschließend mittels einer an die Gesichtsgröß
 
 Der Tracking Viewer dient zur gemeinsamen Visualisierung der Tracking-Ergebnisse und des anonymisierten Videos.
 
-Dafür werden zwei unabhängig voneinander erzeugte Dateien benötigt
+Dafür werden zwei zum selben Eingabevideo gehörende Dateien benötigt
 
 - die beim Tracking und Re-Linking erzeugte JSON-Datei
 - das zum selben Eingabevideo gehörende anonymisierte Video
@@ -98,4 +101,4 @@ Der Ordner `archive` enthält ältere und experimentelle Implementierungen, die 
 
 Die verwendeten Testvideos, Datensätze und daraus erzeugten Ergebnisdateien sind nicht Bestandteil dieses Repositories.
 
-Für die Anwendung der Pipeline kann ein eigenes Eingabevideo verwendet werden. Die JSON-Datei mit den Tracking-Ergebnissen und das anonymisierte Video werden durch die jeweiligen Skripte unabhängig voneinander erzeugt und können anschließend gemeinsam im Tracking Viewer geöffnet werden.
+Für die Anwendung der Pipeline kann ein eigenes Eingabevideo verwendet werden. Die JSON-Datei mit den Tracking-Ergebnissen und das zugehörige anonymisierte Video können anschließend gemeinsam im Tracking Viewer geöffnet werden.
