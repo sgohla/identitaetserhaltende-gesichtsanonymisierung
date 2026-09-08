@@ -1,0 +1,41 @@
+# macOS
+.DS_Store
+**/.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Virtuelle Umgebungen
+venv/
+.venv/
+qwen_test/
+
+# Modellgewichte
+*.pt
+
+# Lokale Datensätze, Videos und Bilder
+MOT17/
+Testvideos/
+Ausgabevideos/
+Testbilder/
+
+# Erzeugte Ergebnisse
+tracking_results/
+reference_tests/
+
+# Ergebnisse der MOT-Evaluation
+mot_results/
+
+# Evaluationsoutputs
+evaluation/kalman/
+evaluation/low_conf/
+evaluation/multi_face/
+evaluation/qwen_json.py
+
+# Lokale ByteTrack-Kopie
+ByteTrack/
+
+# IDE
+.vscode/
+.idea/
