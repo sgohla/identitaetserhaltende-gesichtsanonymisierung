@@ -27,7 +27,7 @@ Die benötigten Python-Abhängigkeiten können über die `requirements.txt` inst
 pip install -r requirements.txt
 ```
 
-Je nach verwendeter Variante können zusätzliche Abhängigkeiten für die eingesetzten Modelle erforderlich sein.
+Die Pfade zu den jeweiligen Eingabevideos und Ergebnisdateien können in den entsprechenden Skripten angepasst werden.
 
 ## Tracking und Re-Linking
 
@@ -51,13 +51,7 @@ Für das VLM-basierte Re-Linking wird Qwen2.5-VL-7B-Instruct verwendet.
 python pipeline/pipeline_qwen_relinking.py
 ```
 
-Für die Ausführung auf dem Mogon-Cluster steht zusätzlich ein SLURM-Skript zur Verfügung
-
-```bash
-sbatch pipeline/run.sbatch
-```
-
-Die für Qwen benötigten Modellgewichte sind nicht Bestandteil dieses Repositories und müssen separat bereitgestellt beziehungsweise geladen werden.
+Die für Qwen benötigten Modellgewichte sind nicht Bestandteil dieses Repositories und werden bei der Verwendung des Modells separat geladen.
 
 ## Erstellung des anonymisierten Videos
 
@@ -86,7 +80,7 @@ Der Viewer wird über folgendes Skript gestartet
 python pipeline/tracking_viewer.py
 ```
 
-Nach dem Start werden die JSON-Datei und das zugehörige anonymisierte Video ausgewählt. Die gespeicherten Tracking- und Target-ID-Informationen werden anschließend gemeinsam mit dem anonymisierten Video dargestellt.
+Vor dem Start werden im Skript die Pfade zur JSON-Datei und zum zugehörigen anonymisierten Video angegeben. Die gespeicherten Tracking- und Target-ID-Informationen werden anschließend gemeinsam mit dem anonymisierten Video dargestellt.
 
 ## Evaluation
 
