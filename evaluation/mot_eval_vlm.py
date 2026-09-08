@@ -1,4 +1,4 @@
-# MOT EVAL mit Histogramm + VLM Relinking
+# MOT17-Evaluation des VLM-gestützten Re-Linkings
 
 import time
 import os
@@ -29,18 +29,16 @@ model = None
 # -------------------------------------------------
 # Qwen-Modell
 # -------------------------------------------------
-QWEN_MODEL_NAME = "/fshpc/sgohla/bachelorarbeit/models/Qwen2.5-VL-7B-Instruct"
+QWEN_MODEL_NAME = "Qwen/Qwen2.5-VL-7B-Instruct"
 
 qwen_model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
     QWEN_MODEL_NAME,
     torch_dtype=torch.bfloat16,
-    device_map="auto",
-    local_files_only=True
+    device_map="auto"
 )
 
 qwen_processor = AutoProcessor.from_pretrained(
-    QWEN_MODEL_NAME,
-    local_files_only=True
+    QWEN_MODEL_NAME
 )
 
 qwen_model.eval()
@@ -189,7 +187,7 @@ def update_reference_frames(track_id, frame, person_box, confidence, frame_idx):
 
     other_index = 1 - worst_index
 
-    # Ersatz nur, wenn der neue Frame besser ist undngenügend Abstand zur anderen Referenz besitzt
+    # Ersatz nur, wenn der neue Frame besser ist und genügend Abstand zur anderen Referenz besitzt
     if (score > stored[worst_index]["score"] and abs(frame_idx - stored[other_index]["frame_idx"]) >= 8):
         stored[worst_index] = candidate
 
@@ -944,6 +942,8 @@ def run_sequence(sequence_name):
     image_dir = sequence_path / "img1"
 
     image_paths = sorted(image_dir.glob("*.jpg"))
+    if not image_paths:
+        raise FileNotFoundError(f"Keine Frames gefunden in: {image_dir}")
 
     video_name = sequence_name.replace("-FRCNN", "")
 

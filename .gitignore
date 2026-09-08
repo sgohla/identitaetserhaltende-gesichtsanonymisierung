@@ -36,6 +36,12 @@ evaluation/qwen_json.py
 # Lokale ByteTrack-Kopie
 ByteTrack/
 
+archive/pipeline_erweiterung4.py
+archive/qwen_test.py
+archive/retinaface.py
+archive/scrfd_frame.py
+archive/scrfd.py
+
 # IDE
 .vscode/
 .idea/

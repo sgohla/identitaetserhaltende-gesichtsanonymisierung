@@ -1,4 +1,4 @@
-# MOT EVAL mit Histogramm Relinking ohne Gesichtsanonymisierung
+# MOT17-Evaluation von ByteTrack und Histogramm-basiertem Re-Linking
 
 import time
 import os
@@ -114,7 +114,7 @@ track_last_seen = {}                 # letztes Auftreten einer Track-ID
 used_target_ids = set()              # bereits vergebene Target-IDs
 
 # Re-Linking-Zustand
-pending_track_frames = {}             # Anzahl beobachteter Frames vor der Zuordnung (für bessere Histogramme)
+pending_track_frames = {}  # Anzahl beobachteter Frames vor der endgültigen Zuordnung
 matched_lost_tracks = set()           # bereits zugeordnete verlorene Tracks
 relinked_track_ids = set()            # erfolgreich re-gelinkte neue Track-IDs
 
@@ -666,6 +666,9 @@ def run_sequence(sequence_name):
     sequence_path = Path("MOT17/val") / sequence_name
     image_dir = sequence_path / "img1"
     image_paths = sorted(image_dir.glob("*.jpg"))
+    
+    if not image_paths:
+        raise FileNotFoundError(f"Keine Frames gefunden in: {image_dir}")
 
     video_name = sequence_name.replace("-FRCNN", "")
 

@@ -1,5 +1,4 @@
-# Pipeline mit Erweiterungen: Selektives Tracking(alte Version), Ausfall von Gesichtserkennung (Kalman-Filter und Auswahl des besten Gesichts)
-
+# Evaluation der Gesichtserkennung und Stabilisierung der Anonymisierung
 import time
 import os
 import cv2
@@ -22,17 +21,21 @@ face_detector = FaceAnalysis(
 face_detector.prepare(
     ctx_id=-1,
     det_size=(320, 320),
-    det_thresh=0.4
+    det_thresh=0.3
 )
 
 
 # Eingabevideo
-video_path = "Testvideos/MOT17-09.mp4"
+video_path = "path/to/input_video.mp4"
 
 cap = cv2.VideoCapture(video_path)
+if not cap.isOpened():
+    raise FileNotFoundError(f"Video konnte nicht geöffnet werden: {video_path}")
 
 # Dateiname ohne Ordner und Endung
 video_name = os.path.splitext(os.path.basename(video_path))[0]
+
+
 
 MULTI_FACE_OUTPUT_DIR = f"Evaluation/multi_face/{video_name}"
 os.makedirs(MULTI_FACE_OUTPUT_DIR, exist_ok=True)
@@ -40,7 +43,8 @@ os.makedirs(MULTI_FACE_OUTPUT_DIR, exist_ok=True)
 MULTI_FACE_SAVE_INTERVAL = 4
 last_multi_face_saved = {}
 
-DET_THRESH = 0.4
+
+DET_THRESH = 0.3
 
 LOW_CONF_OUTPUT_DIR = f"Evaluation/low_conf/{video_name}_thresh_{DET_THRESH}_überarbeitet"
 KALMAN_OUTPUT_DIR = f"Evaluation/kalman/{video_name}_thresh_{DET_THRESH}_überarbeitet"
@@ -50,8 +54,6 @@ os.makedirs(KALMAN_OUTPUT_DIR, exist_ok=True)
 
 LOW_CONF_UPPER_LIMIT = 0.4
 
-low_conf_detections = 0
-kalman_used_frames = 0
 
 # Videoeigenschaften abrufen
 frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -64,7 +66,6 @@ print(f"fps: {fps}")
 save_video = False 
 fourcc = cv2.VideoWriter_fourcc(*"mp4v")
 video_writer = None
-OUTPUT_FPS = 45.0
 
 if save_video:
 
@@ -73,7 +74,7 @@ if save_video:
     video_writer = cv2.VideoWriter(
         f"Ausgabevideos/{video_name}_erweiterung.mp4",
         fourcc,
-        OUTPUT_FPS,
+        fps,
         (frame_width, frame_height)
     )
 
@@ -272,23 +273,30 @@ def save_multi_face_case(frame, person_box, faces, best_face, roi_x1, roi_y1, fr
 
 last_face_boxes = {}
 
-# Evaluation Stabilisierung
-face_selection_cases = 0
-multi_face_cases = 0
-multi_face_initial_selection = 0
-multi_face_history_selection = 0
-multi_face_rejected = 0
-multi_face_same_as_conf = 0
-multi_face_different_from_conf = 0
+# -------------------------------------------------
+# Evaluationsvariablen
+# -------------------------------------------------
 
-face_detection_failures = 0
-kalman_predictions = 0
-kalman_not_possible = 0
-kalman_eligible_failures = 0
-kalman_prediction_failures = 0
-face_detected_frames = 0
-kalman_used_frames = 0
-kalman_correct_frames = 0
+# Mehrfachgesichtsauswahl
+face_selection_cases = 0          # Frames mit mindestens einem Gesichtskandidaten
+multi_face_cases = 0              # Frames mit mehreren Gesichtskandidaten
+multi_face_initial_selection = 0  # Auswahl ohne vorherige Gesichtsposition
+multi_face_history_selection = 0  # Auswahl anhand vorheriger Gesichtsposition
+multi_face_rejected = 0           # Abgelehnte Auswahl wegen zu großer Distanz
+multi_face_same_as_conf = 0       # Eigene Auswahl entspricht höchster SCRFD-Konfidenz
+multi_face_different_from_conf = 0  # Eigene Auswahl weicht von höchster Konfidenz ab
+
+# Gesichtserkennung und Kalman-Überbrückung
+face_detection_failures = 0       # Frames ohne gültige direkte Gesichtserkennung
+kalman_predictions = 0            # Erfolgreich erzeugte Kalman-Vorhersagen
+kalman_not_possible = 0           # Ausfälle, bei denen keine Überbrückung möglich war
+kalman_eligible_failures = 0      # Ausfälle, bei denen Kalman grundsätzlich eingesetzt werden durfte
+kalman_prediction_failures = 0    # Kalman-Vorhersagen ohne gültige Gesichtsbox
+face_detected_frames = 0          # Direkte SCRFD-Gesichtserkennungen
+kalman_used_frames = 0            # Tatsächlich zur Anonymisierung verwendete Kalman-Frames
+
+# Niedrigkonfidente Gesichtserkennungen für die Schwellenwertanalyse
+low_conf_detections = 0
 
 def detect_face(frame, person_box, face_detector, track_id, frame_idx):
     global face_selection_cases
@@ -536,8 +544,8 @@ def process_frame(frame, model, face_detector, frame_idx):
             face_detection_failures += 1
             missing_frames = face_missing_frames.get(track_id, 0)
             detection_count = face_detection_counts.get(track_id, 0)
-            # Beim ersten Ausfall prüfen, ob zuvor mindestens 10
-            # aufeinanderfolgende Gesichtserkennungen vorlagen
+            
+            # Beim ersten Ausfall prüfen, ob zuvor mindestens 5 aufeinanderfolgende Gesichtserkennungen vorlagen
             if missing_frames == 0:
                 kalman_active[track_id] = (detection_count >= MIN_FACE_DETECTIONS_FOR_KALMAN)
                 

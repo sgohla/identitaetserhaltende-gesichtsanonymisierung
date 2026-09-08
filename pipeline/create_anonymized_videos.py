@@ -1,4 +1,4 @@
-# Pipeline mit Erweiterungen: Selektives Tracking(alte Version), Ausfall von Gesichtserkennung (Kalman-Filter und Auswahl des besten Gesichts)
+# Erstellung eines anonymisierten Videos mit stabilisierter Gesichtsanonymisierung
 
 import time
 import os
@@ -27,9 +27,12 @@ face_detector.prepare(
 
 
 # Eingabevideo
-video_path = "Testvideos/verdeckung.MOV"
+video_path = "path/to/input_video.mp4"
 
 cap = cv2.VideoCapture(video_path)
+
+if not cap.isOpened():
+    raise FileNotFoundError(f"Video konnte nicht geöffnet werden: {video_path}")
 
 # Dateiname ohne Ordner und Endung
 video_name = os.path.splitext(os.path.basename(video_path))[0]
@@ -43,9 +46,7 @@ print(f"fps: {fps}")
 
 # VideoWriter-Objekt erstellen, um das Ergebnisvideo zu speichern
 save_video = True
-fourcc = cv2.VideoWriter_fourcc(*"mp4v")
 video_writer = None
-OUTPUT_FPS = 45.0
 
 if save_video:
     
@@ -363,7 +364,6 @@ def process_frame(frame, model, face_detector, frame_idx):
     for box in boxes:
         x1, y1, x2, y2 = box.xyxy[0].cpu().numpy().astype(int) # Koordinaten der Box
         cls = int(box.cls[0]) # Klasse als Integer
-        conf = float(box.conf[0])# Konfidenz als Float
         
         if cls != 0: # Klasse 0 entspricht "person" im COCO-Datensatz
             continue    

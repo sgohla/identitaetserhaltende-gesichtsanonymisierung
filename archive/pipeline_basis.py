@@ -1,6 +1,5 @@
 # Basispipeline ByteTrack und SCRFD auf Person ROI
 
-# Stand: 27.7. 
 import time
 import os
 import cv2
@@ -24,7 +23,6 @@ face_detector.prepare(
     det_size=(320, 320),
     det_thresh=0.3
 )
-
 
 
 

@@ -1,5 +1,5 @@
-# Pipeline mit Histogramm-Relinking (weiterhin Kalman etc. für Stabilierung der Gesichtserkennung + -anonymisierung)
-# + neue Logik fürs Selektive Tracking (JSON Datei erstellen und separater video viewer)
+# Pipeline für Personentracking und Histogramm-basiertes Re-Linking
+# Die Tracking-Ergebnisse mit finalen Target-IDs werden als JSON gespeichert.
 
 import time
 import os
@@ -13,8 +13,7 @@ import json
 # -------------------------------------------------
 # Konfiguration
 # -------------------------------------------------
-video_path = "Testvideos/durcheinander.mp4"
-SAVE_VIDEO = True
+video_path = "path/to/input_video.mp4"
 
 MIN_HISTOGRAM_SIMILARITY = 0.60
 MIN_FRAMES_BEFORE_RELINKING = 5
@@ -49,30 +48,11 @@ face_detector.prepare(
 
 cap = cv2.VideoCapture(video_path)
 
+if not cap.isOpened():
+    raise FileNotFoundError(f"Video konnte nicht geöffnet werden: {video_path}")
+
 # Dateiname ohne Ordner und Endung
 video_name = os.path.splitext(os.path.basename(video_path))[0]
-
-# Videoeigenschaften abrufen
-frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-fps = cap.get(cv2.CAP_PROP_FPS)
-
-print(f"fps: {fps}")
-
-# VideoWriter-Objekt erstellen, um das Ergebnisvideo zu speichern
-video_writer = None
-OUTPUT_FPS = 45.0
-
-if SAVE_VIDEO:
-
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-
-    video_writer = cv2.VideoWriter(
-        f"Ausgabevideos/{video_name}_histogram_anonymized.mp4",
-        fourcc,
-        fps,
-        (frame_width, frame_height)
-    )
 
 
 # -------------------------------------------------
@@ -133,9 +113,9 @@ MIN_SIMILARITY_MARGIN = 0.08   # Mindestabstand zwischen bestem und zweitbestem 
 #Positionsüberprüfung
 MAX_POSITION_DISTANCE_FACTOR = 1.5 # Maximal erlaubte Positionsänderung relativ zur Größe der alten Personenbox.
 
-# Trackingdaten für die spätere Videoausgabe
+# Trackingdaten für die spätere JSON-Ausgabe
 tracking_results = []           # fertigen Einträge mit finalen Target-IDs.
-pending_tracking_results = {}   # hält die ersten Frames einer neuen ByteTrack-ID zurück, solange noch nicht feststeht, ob und wie Qwen sie re-linkt.
+pending_tracking_results = {}   # hält die ersten Frames einer neuen ByteTrack-ID bis zur finalen Target-ID-Zuordnung zurück
 
 
 
@@ -771,7 +751,6 @@ def process_frame(frame, model, face_detector, frame_idx):
         #Track-Informationen auslesen
         x1, y1, x2, y2 = box.xyxy[0].cpu().numpy().astype(int) # Koordinaten der Box
         cls = int(box.cls[0]) # Klasse als Integer
-        conf = float(box.conf[0])# Konfidenz als Float
         
         if cls != 0: # Klasse 0 entspricht "person" im COCO-Datensatz
             continue    
@@ -1021,8 +1000,6 @@ while True:
     total_processing_time += processing_time
     processed_frames += 1
 
-    if SAVE_VIDEO:
-        video_writer.write(processed_frame)
         
         
         
@@ -1055,13 +1032,8 @@ with open(tracking_output_path, "w") as f:
 print(f"Trackingdaten gespeichert: {tracking_output_path}")
 
 
-
 cap.release()
 
-if SAVE_VIDEO:
-    video_writer.release()
-    
-cv2.destroyAllWindows()
 
 if processed_frames > 0:
 

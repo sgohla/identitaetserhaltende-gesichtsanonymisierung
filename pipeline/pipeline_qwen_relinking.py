@@ -1,5 +1,5 @@
-# Modell mit Qwen
-# + neue Logik fürs Selektive Tracking (JSON Datei erstellen und separater video viewer)
+# Pipeline für Personentracking und VLM-gestütztes Re-Linking
+# Die Tracking-Ergebnisse mit finalen Target-IDs werden als JSON gespeichert.
 
 import time
 import os
@@ -16,8 +16,7 @@ import json
 # -------------------------------------------------
 # Konfiguration
 # -------------------------------------------------
-video_path = "Testvideos/durcheinander.mp4"
-SAVE_VIDEO = True
+video_path = "path/to/input_video.mp4"
 
 MIN_HISTOGRAM_SIMILARITY = 0.60
 MIN_FRAMES_BEFORE_RELINKING = 5
@@ -26,19 +25,15 @@ MIN_FRAMES_BEFORE_RELINKING = 5
 # Qwen-Modell
 # -------------------------------------------------
 
-QWEN_MODEL_NAME = "/fshpc/sgohla/bachelorarbeit/models/Qwen2.5-VL-7B-Instruct"
+QWEN_MODEL_NAME = "Qwen/Qwen2.5-VL-7B-Instruct"
 
 qwen_model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
     QWEN_MODEL_NAME,
     torch_dtype=torch.bfloat16,
-    device_map="auto",
-    local_files_only=True
+    device_map="auto"
 )
 
-qwen_processor = AutoProcessor.from_pretrained(
-    QWEN_MODEL_NAME,
-    local_files_only=True
-)
+qwen_processor = AutoProcessor.from_pretrained(QWEN_MODEL_NAME)
 
 qwen_model.eval()
 
@@ -71,31 +66,11 @@ face_detector.prepare(
 
 cap = cv2.VideoCapture(video_path)
 
+if not cap.isOpened():
+    raise FileNotFoundError(f"Video konnte nicht geöffnet werden: {video_path}")
+
 # Dateiname ohne Ordner und Endung
 video_name = os.path.splitext(os.path.basename(video_path))[0]
-
-# Videoeigenschaften abrufen
-frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-fps = cap.get(cv2.CAP_PROP_FPS)
-
-print(f"fps: {fps}")
-
-# VideoWriter-Objekt erstellen, um das Ergebnisvideo zu speichern
-video_writer = None
-OUTPUT_FPS = 45.0
-
-if SAVE_VIDEO:
-
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-
-    video_writer = cv2.VideoWriter(
-        f"Ausgabevideos/{video_name}_qwen_anonymized.mp4",
-        fourcc,
-        fps,
-        (frame_width, frame_height)
-    )
-    
 
 
 # -------------------------------------------------
@@ -346,7 +321,7 @@ track_last_seen = {}                 # letztes Auftreten einer Track-ID
 used_target_ids = set()              # bereits vergebene Target-IDs
 
 # Re-Linking-Zustand
-pending_track_frames = {}             # Anzahl beobachteter Frames vor der Zuordnung (für bessere Histogramme)
+pending_track_frames = {}             # Anzahl beobachteter Frames vor der Zuordnung
 matched_lost_tracks = set()           # bereits zugeordnete verlorene Tracks
 relinked_track_ids = set()            # erfolgreich re-gelinkte neue Track-IDs
 
@@ -366,7 +341,7 @@ MIN_SIMILARITY_MARGIN = 0.08   # Mindestabstand zwischen bestem und zweitbestem 
 #Positionsüberprüfung
 MAX_POSITION_DISTANCE_FACTOR = 1.5 # Maximal erlaubte Positionsänderung relativ zur Größe der alten Personenbox.
 
-# Trackingdaten für die spätere Videoausgabe
+# Trackingdaten für die spätere JSON-Ausgabe
 tracking_results = []           # fertigen Einträge mit finalen Target-IDs.
 pending_tracking_results = {}   # hält die ersten Frames einer neuen ByteTrack-ID zurück, solange noch nicht feststeht, ob und wie Qwen sie re-linkt.
 
@@ -1292,8 +1267,6 @@ while True:
     total_processing_time += processing_time
     processed_frames += 1
 
-    if SAVE_VIDEO:
-        video_writer.write(processed_frame)
 
     
     
@@ -1328,8 +1301,6 @@ print(f"Trackingdaten gespeichert: {tracking_output_path}")
 
 cap.release()
 
-if SAVE_VIDEO:
-    video_writer.release()
     
 
 if processed_frames > 0:

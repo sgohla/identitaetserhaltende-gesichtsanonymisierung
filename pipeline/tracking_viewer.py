@@ -8,31 +8,14 @@ import cv2
 # -------------------------------------------------
 
 # Bereits anonymisiertes Video und zugehörige Trackingdaten
-
-#MOT17-02
-# video_path = "Ausgabevideos/MOT17-02_anonymized.mp4"
-# tracking_path = "tracking_results/MOT17-02_qwen_tracks.json"
-
-
-#MOT17-04
-# video_path = "Ausgabevideos/MOT17-04_histogram_anonymized.mp4"
-# tracking_path = "tracking_results/MOT17-04_qwen_tracks.json"
-
-
-# MOT17-09
-# video_path = "Ausgabevideos/MOT17-09_anonymized.mp4"
-# tracking_path = "tracking_results/MOT17-09_qwen_tracks.json"
-
-#TownCentre
-# video_path = "Ausgabevideos/TownCentre_anonymized.mp4"
-# tracking_path = "tracking_results/TownCentre_qwen_tracks.json"
-
-video_path = "Ausgabevideos/hindernis_anonymized.mp4"
-tracking_path = "tracking_results/hindernis_histogram_tracks.json"
+video_path = "path/to/anonymized_video.mp4"
+tracking_path = "path/to/tracking_results.json"
 
 # Optionales Speichern der selektiven Darstellung
 SAVE_VIDEO = False
-output_path = "Ausgabevideos/durcheinander_histogram_selected.mp4"
+
+video_name = os.path.splitext(os.path.basename(video_path))[0]
+output_path = f"output/{video_name}_selected.mp4"
 
 # Darstellungszustand
 show_all_targets = True
@@ -119,6 +102,9 @@ def run_viewer():
     global show_all_targets
 
     cap = cv2.VideoCapture(video_path)
+    
+    if not cap.isOpened():
+        raise FileNotFoundError(f"Video konnte nicht geöffnet werden: {video_path}")
 
     frame_idx = 0
     paused = False
@@ -210,6 +196,9 @@ def save_selected_video():
         return
 
     cap = cv2.VideoCapture(video_path)
+    
+    if not cap.isOpened():
+        raise FileNotFoundError(f"Video konnte nicht geöffnet werden: {video_path}")
 
     frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))

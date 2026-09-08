@@ -1,6 +1,5 @@
-# Basispipeline ByteTrack und SCRFD auf Person ROI
+# Evaluation der ROI-basierten Gesichtserkennung als Vergleich zur Full-Frame-Gesichtserkennung
 
-# Stand: 27.7. 
 import time
 import os
 import cv2
@@ -26,39 +25,17 @@ face_detector.prepare(
 )
 
 
-
-
 # Eingabevideo
-video_path = "Testvideos/MOT17-09.mp4"
+video_path = "path/to/input_video.mp4"
 
 cap = cv2.VideoCapture(video_path)
+
+if not cap.isOpened():
+    raise FileNotFoundError(f"Video konnte nicht geöffnet werden: {video_path}")
 
 # Dateiname ohne Ordner und Endung
 video_name = os.path.splitext(os.path.basename(video_path))[0]
 
-# Videoeigenschaften abrufen
-frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-fps = cap.get(cv2.CAP_PROP_FPS)
-
-print(f"fps: {fps}")
-
-# VideoWriter-Objekt erstellen, um das Ergebnisvideo zu speichern
-save_video = False 
-fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-video_writer = None
-OUTPUT_FPS = 50.0
-
-if save_video:
-
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-
-    video_writer = cv2.VideoWriter(
-        f"Ausgabevideos/{video_name}_bytetrackvergleich.mp4",
-        fourcc,
-        OUTPUT_FPS,
-        (frame_width, frame_height)
-    )
 
 
 
@@ -271,15 +248,10 @@ while True:
     if face_count > 0:
         frames_with_roi_face += 1
 
-    if save_video:
-        video_writer.write(processed_frame)
 
 
 cap.release()
 
-if save_video:
-    video_writer.release()
-    
 cv2.destroyAllWindows()
 
 
