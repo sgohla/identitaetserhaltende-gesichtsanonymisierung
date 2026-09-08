@@ -2,11 +2,11 @@
 
 Dieses Repository enthält den im Rahmen der Bachelorarbeit **„Identitätserhaltende Anonymisierung von Gesichtern in Videoaufnahmen“** entwickelten Code.
 
-Die entwickelte Pipeline kombiniert Personendetektion und -tracking mit Gesichtserkennung und -anonymisierung. Zusätzlich wurden Verfahren zum Re-Linking unterbrochener Tracks sowie zur Stabilisierung der Gesichtsanonymisierung umgesetzt.
+Die entwickelte Pipeline umfasst die Personendetektion und -verfolgung, Verfahren zum Re-Linking unterbrochener Tracks sowie die Gesichtserkennung und -anonymisierung. Zusätzlich wurden Verfahren zur Stabilisierung der Gesichtsanonymisierung umgesetzt.
 
 ## Verwendete Verfahren
 
-Für die grundlegende Verarbeitung werden folgende Modelle und Verfahren verwendet:
+Für die grundlegende Verarbeitung werden folgende Modelle und Verfahren verwendet
 
 - YOLOv8m zur Personendetektion
 - ByteTrack zur Personenverfolgung
@@ -14,7 +14,7 @@ Für die grundlegende Verarbeitung werden folgende Modelle und Verfahren verwend
 - Gaußsche Weichzeichnung zur Gesichtsanonymisierung
 - Kalman-Filter zur Überbrückung kurzzeitiger Ausfälle der Gesichtserkennung
 
-Für das Re-Linking unterbrochener Tracks stehen zwei Varianten zur Verfügung:
+Für das Re-Linking unterbrochener Tracks stehen zwei Varianten zur Verfügung
 
 - Histogramm-basiertes Re-Linking
 - VLM-basiertes Re-Linking mit Qwen2.5-VL-7B-Instruct
@@ -31,14 +31,16 @@ Je nach verwendeter Variante können zusätzliche Abhängigkeiten für die einge
 
 ## Tracking und Re-Linking
 
-Das Tracking kann entweder mit dem Histogramm-basierten oder dem VLM-basierten Re-Linking durchgeführt werden. Beide Varianten erzeugen eine JSON-Datei, in der die Ergebnisse des Trackings und die Zuordnung der Track-IDs zu den übergeordneten Target-IDs gespeichert werden.
+Für das Tracking und Re-Linking wird ein Eingabevideo verarbeitet. Dabei kann entweder das Histogramm-basierte oder das VLM-basierte Verfahren verwendet werden.
+
+Beide Varianten erzeugen eine JSON-Datei mit den Tracking-Ergebnissen und den Zuordnungen der von ByteTrack vergebenen Track-IDs zu den übergeordneten Target-IDs.
 
 ### Histogramm-basiertes Re-Linking
 
-Das Histogramm-basierte Re-Linking kann über folgendes Skript ausgeführt werden:
+Das Histogramm-basierte Re-Linking wird über folgendes Skript ausgeführt
 
 ```bash
-python <histogram_script>.py
+python pipeline/pipeline_histogram_relinking.py
 ```
 
 ### VLM-basiertes Re-Linking
@@ -46,62 +48,62 @@ python <histogram_script>.py
 Für das VLM-basierte Re-Linking wird Qwen2.5-VL-7B-Instruct verwendet.
 
 ```bash
-python <qwen_script>.py
+python pipeline/pipeline_qwen_relinking.py
 ```
 
-Für die Ausführung auf dem Mogon-Cluster steht zusätzlich ein SLURM-Skript zur Verfügung:
+Für die Ausführung auf dem Mogon-Cluster steht zusätzlich ein SLURM-Skript zur Verfügung
 
 ```bash
-sbatch <qwen_script>.sbatch
+sbatch pipeline/run.sbatch
 ```
 
 Die für Qwen benötigten Modellgewichte sind nicht Bestandteil dieses Repositories und müssen separat bereitgestellt beziehungsweise geladen werden.
 
 ## Erstellung des anonymisierten Videos
 
-Auf Grundlage der erzeugten Tracking-Daten kann anschließend das anonymisierte Video erstellt werden. Das entsprechende Skript befindet sich unter:
+Die Erstellung des anonymisierten Videos erfolgt unabhängig vom Re-Linking. Dafür wird dasselbe Eingabevideo mit folgendem Skript verarbeitet
 
-```text
-eval/create_anonymized_video/
+```bash
+python pipeline/create_anonymized_videos.py
 ```
 
-Bei der Erstellung des Videos wird die Gesichtserkennung innerhalb der durch YOLO und ByteTrack bestimmten Personenregionen durchgeführt. Zusätzlich werden die implementierten Verfahren zur Stabilisierung der Gesichtsanonymisierung angewendet. Dazu gehören die Auswahl eines passenden Gesichts bei mehreren erkannten Gesichtskandidaten sowie die Kalman-basierte Überbrückung kurzzeitiger Ausfälle der Gesichtserkennung.
+Bei der Verarbeitung wird die Gesichtserkennung innerhalb der durch YOLO und ByteTrack bestimmten Personenregionen durchgeführt. Zusätzlich werden die implementierten Verfahren zur Stabilisierung der Gesichtsanonymisierung angewendet. Dazu gehören die Auswahl eines passenden Gesichts bei mehreren erkannten Gesichtskandidaten sowie die Kalman-basierte Überbrückung kurzzeitiger Ausfälle der Gesichtserkennung.
 
 Die erkannten Gesichter werden anschließend mittels einer an die Gesichtsgröße angepassten Gaußschen Weichzeichnung anonymisiert.
 
-Das Skript kann über folgenden Befehl ausgeführt werden:
-
-```bash
-python <anonymization_script>.py
-```
-
 ## Tracking Viewer
 
-Der Tracking Viewer dient zur Visualisierung der Tracking-Ergebnisse zusammen mit dem erzeugten anonymisierten Video.
+Der Tracking Viewer dient zur gemeinsamen Visualisierung der Tracking-Ergebnisse und des anonymisierten Videos.
 
-Für die Verwendung werden zwei Dateien benötigt:
+Dafür werden zwei unabhängig voneinander erzeugte Dateien benötigt
 
-- die beim Tracking erzeugte JSON-Datei
-- das zugehörige anonymisierte Video
+- die beim Tracking und Re-Linking erzeugte JSON-Datei
+- das zum selben Eingabevideo gehörende anonymisierte Video
 
-Der Viewer kann über folgendes Skript gestartet werden:
+Der Viewer wird über folgendes Skript gestartet
 
 ```bash
-python <tracking_viewer>.py
+python pipeline/tracking_viewer.py
 ```
 
-Nach dem Start werden die JSON-Datei und das zugehörige anonymisierte Video ausgewählt. Die in der JSON-Datei gespeicherten Tracking- und Target-ID-Informationen werden anschließend gemeinsam mit dem Video dargestellt.
+Nach dem Start werden die JSON-Datei und das zugehörige anonymisierte Video ausgewählt. Die gespeicherten Tracking- und Target-ID-Informationen werden anschließend gemeinsam mit dem anonymisierten Video dargestellt.
 
 ## Evaluation
 
-Das Repository enthält außerdem Skripte, die für die Evaluation der entwickelten Verfahren verwendet wurden.
+Der Ordner `evaluation` enthält die Skripte, die für die Evaluation der entwickelten Verfahren verwendet wurden.
 
-Die Evaluation des Personentrackings basiert auf ausgewählten Sequenzen des MOT17-Datensatzes. Dabei wurden ByteTrack sowie die entwickelten Re-Linking-Varianten miteinander verglichen.
+Die Evaluation des Personentrackings basiert auf ausgewählten Sequenzen des MOT17-Datensatzes. Dabei wurden ByteTrack sowie die entwickelten Re-Linking-Verfahren miteinander verglichen.
 
-Weitere Evaluationsskripte dienen der Untersuchung der ROI-basierten Gesichtserkennung und der Verfahren zur Stabilisierung der Gesichtsanonymisierung.
+Weitere Evaluationsskripte dienen der Untersuchung der ROI-basierten Gesichtserkennung, der Auswahl bei mehreren Gesichtskandidaten sowie der Verfahren zur Stabilisierung der Gesichtsanonymisierung.
+
+## Archive
+
+Der Ordner `archive` enthält ältere und experimentelle Implementierungen, die während der Entwicklung der Pipeline entstanden sind. Diese Dateien sind nicht Bestandteil des finalen Workflows.
 
 ## Hinweise
 
-Große Dateien wie Modellgewichte, verwendete Testvideos und Datensätze sind nicht Bestandteil des Repositories.
+Die verwendeten Testvideos, Datensätze und daraus erzeugten Ergebnisdateien sind nicht Bestandteil dieses Repositories.
 
-Für die Tracking-Evaluation wird der MOT17-Datensatz separat benötigt. Qwen2.5-VL-7B-Instruct und weitere verwendete Modellgewichte müssen ebenfalls separat bereitgestellt werden.
+Für die Anwendung der Pipeline kann ein eigenes Eingabevideo verwendet werden. Die JSON-Datei mit den Tracking-Ergebnissen und das anonymisierte Video werden durch die jeweiligen Skripte unabhängig voneinander erzeugt und können anschließend gemeinsam im Tracking Viewer geöffnet werden.
+
+Für die Tracking-Evaluation wird der MOT17-Datensatz separat benötigt. Qwen2.5-VL-7B-Instruct sowie weitere verwendete Modellgewichte müssen ebenfalls separat bereitgestellt werden.
