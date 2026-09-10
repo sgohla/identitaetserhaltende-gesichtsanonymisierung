@@ -1,6 +1,6 @@
-# Identitätserhaltende Anonymisierung von Gesichtern in Videoaufnahmen
+# Identitätserhaltende Anonymisierung von Personen in Videoaufnahmen
 
-Dieses Repository enthält den im Rahmen der Bachelorarbeit **„Identitätserhaltende Anonymisierung von Gesichtern in Videoaufnahmen“** entwickelten Code.
+Dieses Repository enthält den im Rahmen der Bachelorarbeit **„Identitätserhaltende Anonymisierung von Personen in Videoaufnahmen“** entwickelten Code.
 
 Die entwickelte Pipeline umfasst die Personendetektion und -verfolgung, Verfahren zum Re-Linking unterbrochener Tracks sowie die Gesichtsdetektion und -anonymisierung. Zusätzlich wurden Verfahren zur Stabilisierung der Gesichtsanonymisierung umgesetzt.
 
