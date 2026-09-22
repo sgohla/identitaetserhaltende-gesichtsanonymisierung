@@ -204,6 +204,7 @@ def compare_reference_frames_with_qwen(old_frames, new_frames):
                 NOT be the main reason for deciding SAME.
 
                 Compare additional clearly visible person-specific characteristics:
+                - glasses and eyewear
                 - hair and hairstyle
                 - body build and proportions
                 - clothing design and cut
@@ -213,6 +214,12 @@ def compare_reference_frames_with_qwen(old_frames, new_frames):
                 - bags and accessories
                 - facial appearance, if clearly visible
                 - other distinctive characteristics
+                
+                Pay particular attention to glasses and eyewear.
+                If glasses are clearly visible on one person but clearly absent on the
+                other person across usable images, treat this as strong contradictory
+                evidence. Do not infer absence of glasses when the eye region is blurry,
+                occluded, too small, or not clearly visible.
 
                 Ignore:
                 - background
