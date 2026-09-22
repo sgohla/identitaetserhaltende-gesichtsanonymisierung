@@ -17,8 +17,8 @@ import json
 # -------------------------------------------------
 video_path = "Testvideos/ähnliche_farben.mp4"
 
-MIN_HISTOGRAM_SIMILARITY = 0.65
-MIN_FRAMES_BEFORE_RELINKING = 10
+MIN_HISTOGRAM_SIMILARITY = 0.70
+MIN_FRAMES_BEFORE_RELINKING = 15
 
 # -------------------------------------------------
 # Qwen-Modell
